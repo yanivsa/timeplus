@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">Time+</string>
+    <string name="offline_title">אין כרגע חיבור לאינטרנט</string>
+    <string name="offline_message">לא ניתן להתחבר לאקדמיית הזמן. אנא בדקו את החיבור לרשת ונסו שוב.</string>
+    <string name="retry">נסה שוב</string>
+</resources>

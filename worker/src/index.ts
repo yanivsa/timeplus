@@ -1,0 +1,867 @@
+import { Env, AuthUser } from './types';
+import {
+  getSessionUser,
+  createSession,
+  createSessionCookie,
+  clearSessionCookie,
+  deleteSession,
+  checkRateLimit,
+  recordLoginAttempt,
+  parseCookies,
+} from './auth';
+import { verifyPin, hashPin, generateSalt, generateId } from './crypto';
+import {
+  isSystemInitialized,
+  getPublicChildrenList,
+  initializeFamily,
+  SetupPayload,
+} from './init';
+import {
+  ensureDailyTaskInstances,
+  submitTask,
+  approveTask,
+  rejectTask,
+} from './tasks';
+import {
+  requestScreenTime,
+  reviewScreenTimeRequest,
+  logManualScreenUsage,
+  adjustMinutes,
+  correctUsage,
+  getChildWalletSummary,
+} from './wallet';
+import { getRankDetails } from './gamification';
+import { getIsraelDateString } from './timezone';
+
+function json(data: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
+  const headers = new Headers({
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    ...extraHeaders,
+  });
+  return new Response(JSON.stringify(data), { status, headers });
+}
+
+function errorJson(message: string, status = 400, extraHeaders: HeadersInit = {}): Response {
+  return json({ success: false, error: message }, status, extraHeaders);
+}
+
+export default {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    const pathname = url.pathname;
+    const method = request.method;
+
+    // --- 1. HEALTH AND VERSION ENDPOINTS ---
+    if (pathname === '/healthz' && method === 'GET') {
+      return json({
+        status: 'ok',
+        app: env.APP_NAME || 'Time+',
+        time: new Date().toISOString(),
+        timezone: env.TIMEZONE || 'Asia/Jerusalem',
+        israelDate: getIsraelDateString(),
+      });
+    }
+
+    if (pathname === '/api/version' && method === 'GET') {
+      return json({
+        webVersion: env.WEB_VERSION || '1.0.0',
+        apiVersion: env.API_VERSION || '1.0.0',
+        environment: env.ENVIRONMENT || 'production',
+        webBuildId: 'tp-' + (env.WEB_VERSION || '1.0.0'),
+      });
+    }
+
+    // --- 2. SETUP & INITIALIZATION ---
+    if (pathname === '/api/setup/status' && method === 'GET') {
+      const initialized = await isSystemInitialized(env.DB);
+      let children: { id: string; name: string; avatar: string; color: string }[] = [];
+      let familyName = 'משפחה';
+      if (initialized) {
+        children = await getPublicChildrenList(env.DB);
+        const family = await env.DB.prepare(`SELECT name FROM families LIMIT 1`).first<{ name: string }>();
+        if (family) familyName = family.name;
+      }
+      return json({ initialized, familyName, children });
+    }
+
+    if (pathname === '/api/setup/init' && method === 'POST') {
+      try {
+        const payload = (await request.json()) as SetupPayload;
+        const result = await initializeFamily(env.DB, env, payload);
+        if (!result.success) {
+          return errorJson(result.error || 'אתחול נכשל', 400);
+        }
+        const cookie = createSessionCookie(result.sessionToken!);
+        return json(
+          { success: true, message: 'המערכת אותחלה בהצלחה' },
+          200,
+          { 'Set-Cookie': cookie }
+        );
+      } catch (err: any) {
+        return errorJson('שגיאה בעיבוד נתוני האתחול: ' + err.message, 500);
+      }
+    }
+
+    // --- 3. AUTHENTICATION ---
+    if (pathname === '/api/auth/login' && method === 'POST') {
+      const ip = request.headers.get('CF-Connecting-IP') || '127.0.0.1';
+      const body = (await request.json().catch(() => ({}))) as {
+        role?: 'parent' | 'child';
+        pin?: string;
+        childId?: string;
+      };
+
+      const role = body.role;
+      const pin = body.pin;
+      const childId = body.childId;
+
+      if (!role || !pin) {
+        return errorJson('נא לספק תפקיד וקוד סודי', 400);
+      }
+
+      const targetId = role === 'parent' ? 'parent' : childId || 'unknown_child';
+
+      // Rate limit check
+      const rateLimit = await checkRateLimit(env.DB, ip, targetId);
+      if (!rateLimit.allowed) {
+        return errorJson(
+          `יותר מדי ניסיונות שגויים. החשבון נעול ל-${rateLimit.remainingMinutes} דקות להגנה על המערכת.`,
+          429
+        );
+      }
+
+      const pepper = env.PEPPER_SECRET || 'timeplus_pepper_default';
+      const familyId = env.DEFAULT_FAMILY_ID || 'yaniv_family';
+
+      if (role === 'parent') {
+        const family = await env.DB.prepare(
+          `SELECT id, name, parent_pin_hash, parent_pin_salt FROM families WHERE id = ?`
+        )
+          .bind(familyId)
+          .first<{ id: string; name: string; parent_pin_hash: string; parent_pin_salt: string }>();
+
+        if (!family) {
+          return errorJson('המשפחה טרם הוגדרה במערכת', 404);
+        }
+
+        const valid = await verifyPin(pin, family.parent_pin_hash, family.parent_pin_salt, pepper);
+        await recordLoginAttempt(env.DB, ip, 'parent', 'parent', valid);
+
+        if (!valid) {
+          return errorJson('קוד הורה שגוי', 401);
+        }
+
+        const { token } = await createSession(env.DB, family.id, 'parent');
+        const cookie = createSessionCookie(token);
+        const user: AuthUser = { id: 'parent', name: 'הורים', role: 'parent', familyId: family.id };
+
+        return json({ success: true, user, token }, 200, { 'Set-Cookie': cookie });
+      } else if (role === 'child') {
+        if (!childId) {
+          return errorJson('נא לבחור פרופיל ילד', 400);
+        }
+
+        const child = await env.DB.prepare(
+          `SELECT id, family_id, name, pin_hash, pin_salt, avatar, color FROM children WHERE id = ? AND family_id = ?`
+        )
+          .bind(childId, familyId)
+          .first<{
+            id: string;
+            family_id: string;
+            name: string;
+            pin_hash: string;
+            pin_salt: string;
+            avatar: string;
+            color: string;
+          }>();
+
+        if (!child) {
+          return errorJson('הילד לא נמצא', 404);
+        }
+
+        const valid = await verifyPin(pin, child.pin_hash, child.pin_salt, pepper);
+        await recordLoginAttempt(env.DB, ip, 'child', childId, valid);
+
+        if (!valid) {
+          return errorJson('קוד סודי שגוי', 401);
+        }
+
+        const { token } = await createSession(env.DB, child.family_id, 'child', child.id);
+        const cookie = createSessionCookie(token);
+        const user: AuthUser = {
+          id: child.id,
+          name: child.name,
+          role: 'child',
+          familyId: child.family_id,
+          avatar: child.avatar,
+          color: child.color,
+        };
+
+        return json({ success: true, user, token }, 200, { 'Set-Cookie': cookie });
+      }
+
+      return errorJson('תפקיד לא תקין', 400);
+    }
+
+    if (pathname === '/api/auth/logout' && method === 'POST') {
+      const cookieHeader = request.headers.get('Cookie');
+      const cookies = parseCookies(cookieHeader);
+      const token = cookies['timeplus_session'];
+      if (token) {
+        await deleteSession(env.DB, token);
+      }
+      return json({ success: true }, 200, { 'Set-Cookie': clearSessionCookie() });
+    }
+
+    if (pathname === '/api/auth/me' && method === 'GET') {
+      const user = await getSessionUser(request, env.DB);
+      if (!user) {
+        return errorJson('לא מחובר', 401);
+      }
+      return json({ success: true, user });
+    }
+
+    // --- 4. AUTHENTICATION MIDDLEWARE FOR /api/* ---
+    if (pathname.startsWith('/api/')) {
+      const user = await getSessionUser(request, env.DB);
+      if (!user) {
+        return errorJson('נדרשת התחברות למערכת', 401);
+      }
+
+      // Lazy generation of today's instances
+      await ensureDailyTaskInstances(env.DB, user.familyId);
+
+      // --- CHILD ROUTES ---
+      if (pathname === '/api/child/dashboard' && method === 'GET') {
+        const childId = user.role === 'child' ? user.id : url.searchParams.get('childId');
+        if (!childId) return errorJson('חסר מזהה ילד', 400);
+
+        const child = await env.DB.prepare(
+          `SELECT id, name, avatar, color, available_minutes FROM children WHERE id = ? AND family_id = ?`
+        )
+          .bind(childId, user.familyId)
+          .first<{ id: string; name: string; avatar: string; color: string; available_minutes: number }>();
+
+        if (!child) return errorJson('הילד לא נמצא', 404);
+
+        const walletSummary = await getChildWalletSummary(env.DB, childId);
+
+        // Progress & XP
+        const progress = await env.DB.prepare(
+          `SELECT level, xp, current_streak_days, best_streak_days FROM child_progress WHERE child_id = ?`
+        )
+          .bind(childId)
+          .first<{ level: number; xp: number; current_streak_days: number; best_streak_days: number }>();
+
+        const currentXp = progress?.xp || 0;
+        const rankInfo = getRankDetails(currentXp);
+
+        // Pending count
+        const pendingRow = await env.DB.prepare(
+          `SELECT COUNT(*) as count FROM task_instances WHERE child_id = ? AND status = 'submitted'`
+        )
+          .bind(childId)
+          .first<{ count: number }>();
+
+        // Best next open task
+        const nextTask = await env.DB.prepare(
+          `SELECT id, title, description, reward_minutes FROM task_instances 
+           WHERE child_id = ? AND status = 'open' 
+           ORDER BY reward_minutes DESC LIMIT 1`
+        )
+          .bind(childId)
+          .first();
+
+        return json({
+          child,
+          wallet: walletSummary,
+          progress: {
+            ...rankInfo,
+            currentStreakDays: progress?.current_streak_days || 0,
+            bestStreakDays: progress?.best_streak_days || 0,
+          },
+          pendingSubmissionsCount: pendingRow?.count || 0,
+          recommendedTask: nextTask || null,
+        });
+      }
+
+      if (pathname === '/api/child/tasks' && method === 'GET') {
+        const childId = user.role === 'child' ? user.id : url.searchParams.get('childId');
+        if (!childId) return errorJson('חסר מזהה ילד', 400);
+
+        const todayIsrael = getIsraelDateString();
+        const { results: tasks } = await env.DB.prepare(
+          `SELECT ti.*, ts.note as submission_note 
+           FROM task_instances ti
+           LEFT JOIN task_submissions ts ON ts.task_instance_id = ti.id AND ts.status = 'pending'
+           WHERE ti.child_id = ? AND (ti.due_date = ? OR ti.status = 'submitted')
+           ORDER BY 
+             CASE ti.status 
+               WHEN 'open' THEN 1 
+               WHEN 'submitted' THEN 2 
+               WHEN 'rejected' THEN 3 
+               ELSE 4 
+             END, 
+             ti.reward_minutes DESC`
+        )
+          .bind(childId, todayIsrael)
+          .all();
+
+        return json({ tasks });
+      }
+
+      if (pathname.match(/^\/api\/child\/tasks\/[^/]+\/submit$/) && method === 'POST') {
+        const instanceId = pathname.split('/')[4];
+        const body = await request.json().catch(() => ({}));
+        const note = (body as any).note || null;
+        const photoKey = (body as any).photoObjectKey || null;
+
+        const childId = user.role === 'child' ? user.id : (body as any).childId;
+        if (!childId) return errorJson('לא צוין מזהה ילד', 400);
+
+        const result = await submitTask(env.DB, instanceId, childId, note, photoKey);
+        if (!result.success) {
+          return errorJson(result.error || 'הגשת המשימה נכשלה', 400);
+        }
+        return json({ success: true, message: 'המשימה נשלחה לאישור ההורים!' });
+      }
+
+      if (pathname === '/api/child/screen-time/request' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const minutes = Number(body.minutes);
+        const source = body.source || 'other';
+
+        const childId = user.role === 'child' ? user.id : body.childId;
+        if (!childId) return errorJson('לא צוין מזהה ילד', 400);
+
+        const result = await requestScreenTime(env.DB, user.familyId, childId, minutes, source);
+        if (!result.success) {
+          return errorJson(result.error || 'הבקשה נכשלה', 400);
+        }
+        return json({ success: true, message: 'בקשת זמן המסך נשלחה להורים!' });
+      }
+
+      if (pathname === '/api/child/history' && method === 'GET') {
+        const childId = user.role === 'child' ? user.id : url.searchParams.get('childId');
+        if (!childId) return errorJson('חסר מזהה ילד', 400);
+
+        const limit = Number(url.searchParams.get('limit')) || 30;
+        const { results: transactions } = await env.DB.prepare(
+          `SELECT * FROM minute_transactions 
+           WHERE child_id = ? 
+           ORDER BY created_at DESC LIMIT ?`
+        )
+          .bind(childId, limit)
+          .all();
+
+        return json({ transactions });
+      }
+
+      if (pathname === '/api/child/celebration' && method === 'GET') {
+        const childId = user.role === 'child' ? user.id : url.searchParams.get('childId');
+        if (!childId) return errorJson('חסר מזהה ילד', 400);
+
+        const event = await env.DB.prepare(
+          `SELECT * FROM reward_events 
+           WHERE child_id = ? AND seen_at IS NULL 
+           ORDER BY created_at ASC LIMIT 1`
+        )
+          .bind(childId)
+          .first();
+
+        if (event) {
+          // Mark seen
+          await env.DB.prepare(`UPDATE reward_events SET seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`)
+            .bind(event.id)
+            .run();
+        }
+
+        return json({ event: event || null });
+      }
+
+      // --- NOTIFICATIONS (Accessible by both parent and child) ---
+      if (pathname === '/api/notifications' && method === 'GET') {
+        const { results: notifications } = await env.DB.prepare(
+          `SELECT * FROM notifications 
+           WHERE family_id = ? 
+             AND (recipient_role = ? OR (recipient_role = 'child' AND recipient_child_id = ?))
+           ORDER BY created_at DESC LIMIT 30`
+        )
+          .bind(user.familyId, user.role, user.role === 'child' ? user.id : '')
+          .all();
+
+        return json({ notifications });
+      }
+
+      if (pathname === '/api/notifications/read-all' && method === 'POST') {
+        const now = new Date().toISOString();
+        await env.DB.prepare(
+          `UPDATE notifications 
+           SET read_at = ? 
+           WHERE family_id = ? 
+             AND read_at IS NULL
+             AND (recipient_role = ? OR (recipient_role = 'child' AND recipient_child_id = ?))`
+        )
+          .bind(now, user.familyId, user.role, user.role === 'child' ? user.id : '')
+          .run();
+
+        return json({ success: true });
+      }
+
+      // --- PARENT ROUTES (Restricted to role === 'parent') ---
+      if (user.role !== 'parent') {
+        return errorJson('פעולה זו מורשית להורים בלבד', 403);
+      }
+
+      if (pathname === '/api/parent/dashboard' && method === 'GET') {
+        // Detailed summary of all children
+        const { results: children } = await env.DB.prepare(
+          `SELECT c.id, c.name, c.avatar, c.color, c.available_minutes, c.debt_limit_minutes,
+                  cp.level, cp.xp, cp.current_streak_days, cp.best_streak_days
+           FROM children c
+           LEFT JOIN child_progress cp ON cp.child_id = c.id
+           WHERE c.family_id = ?
+           ORDER BY c.created_at ASC`
+        )
+          .bind(user.familyId)
+          .all<any>();
+
+        const childrenSummaries = [];
+        for (const child of children) {
+          const stats = await getChildWalletSummary(env.DB, child.id);
+          const rank = getRankDetails(child.xp || 0);
+
+          const openTasks = await env.DB.prepare(
+            `SELECT COUNT(*) as count FROM task_instances WHERE child_id = ? AND status = 'open' AND due_date = ?`
+          )
+            .bind(child.id, getIsraelDateString())
+            .first<{ count: number }>();
+
+          const pendingTasks = await env.DB.prepare(
+            `SELECT COUNT(*) as count FROM task_instances WHERE child_id = ? AND status = 'submitted'`
+          )
+            .bind(child.id)
+            .first<{ count: number }>();
+
+          const pendingRequests = await env.DB.prepare(
+            `SELECT COUNT(*) as count FROM screen_time_requests WHERE child_id = ? AND status = 'pending'`
+          )
+            .bind(child.id)
+            .first<{ count: number }>();
+
+          childrenSummaries.push({
+            ...child,
+            wallet: stats,
+            rankTitle: rank.rankTitle,
+            progressPercent: rank.progressPercent,
+            openTasksCount: openTasks?.count || 0,
+            pendingApprovalsCount: pendingTasks?.count || 0,
+            pendingScreenRequestsCount: pendingRequests?.count || 0,
+          });
+        }
+
+        // Global pending counts
+        const totalPendingTasks = await env.DB.prepare(
+          `SELECT COUNT(*) as count FROM task_instances WHERE family_id = ? AND status = 'submitted'`
+        )
+          .bind(user.familyId)
+          .first<{ count: number }>();
+
+        const totalPendingRequests = await env.DB.prepare(
+          `SELECT COUNT(*) as count FROM screen_time_requests WHERE family_id = ? AND status = 'pending'`
+        )
+          .bind(user.familyId)
+          .first<{ count: number }>();
+
+        return json({
+          children: childrenSummaries,
+          totalPendingTasks: totalPendingTasks?.count || 0,
+          totalPendingRequests: totalPendingRequests?.count || 0,
+        });
+      }
+
+      if (pathname === '/api/parent/approvals' && method === 'GET') {
+        const { results: pendingTasks } = await env.DB.prepare(
+          `SELECT ti.*, c.name as child_name, c.color as child_color, c.avatar as child_avatar,
+                  ts.note as submission_note, ts.photo_object_key, ts.submitted_at as submission_time
+           FROM task_instances ti
+           JOIN children c ON c.id = ti.child_id
+           LEFT JOIN task_submissions ts ON ts.task_instance_id = ti.id AND ts.status = 'pending'
+           WHERE ti.family_id = ? AND ti.status = 'submitted'
+           ORDER BY ts.submitted_at ASC`
+        )
+          .bind(user.familyId)
+          .all();
+
+        const { results: pendingRequests } = await env.DB.prepare(
+          `SELECT str.*, c.name as child_name, c.color as child_color, c.avatar as child_avatar, c.available_minutes
+           FROM screen_time_requests str
+           JOIN children c ON c.id = str.child_id
+           WHERE str.family_id = ? AND str.status = 'pending'
+           ORDER BY str.requested_at ASC`
+        )
+          .bind(user.familyId)
+          .all();
+
+        return json({ pendingTasks, pendingRequests });
+      }
+
+      if (pathname.match(/^\/api\/parent\/tasks\/[^/]+\/approve$/) && method === 'POST') {
+        const instanceId = pathname.split('/')[4];
+        const body = (await request.json().catch(() => ({}))) as any;
+        const customReward = body.rewardMinutes !== undefined ? Number(body.rewardMinutes) : undefined;
+
+        const result = await approveTask(env.DB, instanceId, user.familyId, customReward);
+        if (!result.success) {
+          return errorJson(result.error || 'אישור המשימה נכשל', 400);
+        }
+        return json({
+          success: true,
+          message: 'המשימה אושרה בהצלחה והדקות הועברו לילד',
+          minutesAwarded: result.minutesAwarded,
+          xpAwarded: result.xpAwarded,
+        });
+      }
+
+      if (pathname.match(/^\/api\/parent\/tasks\/[^/]+\/reject$/) && method === 'POST') {
+        const instanceId = pathname.split('/')[4];
+        const body = (await request.json().catch(() => ({}))) as any;
+        const reason = body.reason || null;
+
+        const result = await rejectTask(env.DB, instanceId, user.familyId, reason);
+        if (!result.success) {
+          return errorJson(result.error || 'דחיית המשימה נכשלה', 400);
+        }
+        return json({ success: true, message: 'המשימה נדחתה' });
+      }
+
+      if (pathname.match(/^\/api\/parent\/screen-time\/[^/]+\/review$/) && method === 'POST') {
+        const requestId = pathname.split('/')[4];
+        const body = (await request.json().catch(() => ({}))) as any;
+        const approved = Boolean(body.approved);
+        const customMinutes = body.customMinutes !== undefined ? Number(body.customMinutes) : undefined;
+
+        const result = await reviewScreenTimeRequest(env.DB, requestId, user.familyId, approved, customMinutes);
+        if (!result.success) {
+          return errorJson(result.error || 'הפעולה נכשלה', 400);
+        }
+        return json({
+          success: true,
+          message: approved ? 'בקשת זמן המסך אושרה והדקות נוכו' : 'בקשת זמן המסך נדחתה',
+          deductedMinutes: result.deductedMinutes,
+        });
+      }
+
+      if (pathname === '/api/parent/usage/log' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const childId = body.childId;
+        const minutes = Number(body.minutes);
+        const source = body.source || 'other';
+        const reason = body.reason || null;
+
+        if (!childId || !minutes || minutes <= 0) {
+          return errorJson('נתונים חסרים לרישום ניצול', 400);
+        }
+
+        const result = await logManualScreenUsage(env.DB, user.familyId, childId, minutes, source, reason);
+        if (!result.success) {
+          return errorJson(result.error || 'רישום ניצול נכשל', 400);
+        }
+        return json({
+          success: true,
+          message: 'הניצול נרשם בהצלחה',
+          warning: result.warning,
+          newBalance: result.newBalance,
+        });
+      }
+
+      if (pathname.match(/^\/api\/parent\/usage\/[^/]+\/correct$/) && method === 'POST') {
+        const usageLogId = pathname.split('/')[4];
+        const body = (await request.json().catch(() => ({}))) as any;
+        const correctionReason = body.correctionReason || 'תיקון רישום שגוי';
+
+        const result = await correctUsage(env.DB, user.familyId, usageLogId, correctionReason);
+        if (!result.success) {
+          return errorJson(result.error || 'תיקון הרישום נכשל', 400);
+        }
+        return json({
+          success: true,
+          message: 'הרישום תוקן והדקות הוחזרו לחשבון הילד',
+          refundedMinutes: result.refundedMinutes,
+          newBalance: result.newBalance,
+        });
+      }
+
+      if (pathname === '/api/parent/minutes/adjust' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const childId = body.childId;
+        const minutesDelta = Number(body.minutesDelta);
+        const reason = body.reason || '';
+
+        if (!childId || isNaN(minutesDelta)) {
+          return errorJson('נתונים לא תקינים', 400);
+        }
+
+        const result = await adjustMinutes(env.DB, user.familyId, childId, minutesDelta, reason);
+        if (!result.success) {
+          return errorJson(result.error || 'עדכון דקות נכשל', 400);
+        }
+        return json({
+          success: true,
+          message: 'היתרה עודכנה בהצלחה',
+          warning: result.warning,
+          newBalance: result.newBalance,
+        });
+      }
+
+      if (pathname === '/api/parent/tasks/templates' && method === 'GET') {
+        const { results: templates } = await env.DB.prepare(
+          `SELECT tt.*, 
+                  GROUP_CONCAT(ttc.child_id) as assigned_child_ids_str
+           FROM task_templates tt
+           LEFT JOIN task_template_children ttc ON ttc.template_id = tt.id
+           WHERE tt.family_id = ? AND tt.archived_at IS NULL
+           GROUP BY tt.id
+           ORDER BY tt.created_at DESC`
+        )
+          .bind(user.familyId)
+          .all<any>();
+
+        const formatted = templates.map((t) => ({
+          ...t,
+          assigned_child_ids: t.assigned_child_ids_str ? t.assigned_child_ids_str.split(',') : [],
+        }));
+
+        return json({ templates: formatted });
+      }
+
+      if (pathname === '/api/parent/tasks/templates' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const title = body.title?.trim();
+        const description = body.description?.trim() || null;
+        const rewardMinutes = Number(body.rewardMinutes) || 15;
+        const scheduleType = body.scheduleType || 'daily';
+        const daysOfWeek = body.daysOfWeek ? JSON.stringify(body.daysOfWeek) : '[0,1,2,3,4,5,6]';
+        const requiresPhoto = body.requiresPhoto ? 1 : 0;
+        const assignedChildIds = Array.isArray(body.assignedChildIds) ? body.assignedChildIds : [];
+
+        if (!title) {
+          return errorJson('כותרת משימה נדרשת', 400);
+        }
+
+        const templateId = generateId();
+        const now = new Date().toISOString();
+
+        await env.DB.prepare(
+          `INSERT INTO task_templates (
+            id, family_id, title, description, reward_minutes, schedule_type, days_of_week, 
+            requires_photo, is_active, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+        )
+          .bind(templateId, user.familyId, title, description, rewardMinutes, scheduleType, daysOfWeek, requiresPhoto, now, now)
+          .run();
+
+        for (const cId of assignedChildIds) {
+          await env.DB.prepare(`INSERT INTO task_template_children (template_id, child_id) VALUES (?, ?)`).bind(templateId, cId).run();
+        }
+
+        // Generate instances for today
+        await ensureDailyTaskInstances(env.DB, user.familyId);
+
+        return json({ success: true, message: 'תבנית המשימה נוצרה בהצלחה', templateId });
+      }
+
+      if (pathname.match(/^\/api\/parent\/tasks\/templates\/[^/]+$/) && method === 'PUT') {
+        const templateId = pathname.split('/')[5];
+        const body = (await request.json().catch(() => ({}))) as any;
+        const title = body.title?.trim();
+        const description = body.description !== undefined ? body.description?.trim() : null;
+        const rewardMinutes = Number(body.rewardMinutes);
+        const isActive = body.isActive !== undefined ? (body.isActive ? 1 : 0) : 1;
+        const assignedChildIds = Array.isArray(body.assignedChildIds) ? body.assignedChildIds : null;
+        const now = new Date().toISOString();
+
+        await env.DB.prepare(
+          `UPDATE task_templates 
+           SET title = COALESCE(?, title),
+               description = COALESCE(?, description),
+               reward_minutes = COALESCE(?, reward_minutes),
+               is_active = ?,
+               updated_at = ?
+           WHERE id = ? AND family_id = ?`
+        )
+          .bind(title, description, isNaN(rewardMinutes) ? null : rewardMinutes, isActive, now, templateId, user.familyId)
+          .run();
+
+        if (assignedChildIds) {
+          await env.DB.prepare(`DELETE FROM task_template_children WHERE template_id = ?`).bind(templateId).run();
+          for (const cId of assignedChildIds) {
+            await env.DB.prepare(`INSERT INTO task_template_children (template_id, child_id) VALUES (?, ?)`).bind(templateId, cId).run();
+          }
+        }
+
+        return json({ success: true, message: 'תבנית המשימה עודכנה בהצלחה' });
+      }
+
+      if (pathname.match(/^\/api\/parent\/tasks\/templates\/[^/]+$/) && method === 'DELETE') {
+        const templateId = pathname.split('/')[5];
+        const now = new Date().toISOString();
+        await env.DB.prepare(`UPDATE task_templates SET archived_at = ?, is_active = 0 WHERE id = ? AND family_id = ?`)
+          .bind(now, templateId, user.familyId)
+          .run();
+        return json({ success: true, message: 'תבנית המשימה הועברה לארכיון' });
+      }
+
+      if (pathname === '/api/parent/history' && method === 'GET') {
+        const childId = url.searchParams.get('childId');
+        const type = url.searchParams.get('type');
+        const limit = Number(url.searchParams.get('limit')) || 50;
+
+        let query = `SELECT mt.*, c.name as child_name, c.color as child_color 
+                     FROM minute_transactions mt
+                     JOIN children c ON c.id = mt.child_id
+                     WHERE mt.family_id = ?`;
+        const params: any[] = [user.familyId];
+
+        if (childId) {
+          query += ` AND mt.child_id = ?`;
+          params.push(childId);
+        }
+        if (type) {
+          query += ` AND mt.type = ?`;
+          params.push(type);
+        }
+
+        query += ` ORDER BY mt.created_at DESC LIMIT ?`;
+        params.push(limit);
+
+        const { results: transactions } = await env.DB.prepare(query).bind(...params).all();
+        return json({ transactions });
+      }
+
+      if (pathname === '/api/parent/stats' && method === 'GET') {
+        const { results: children } = await env.DB.prepare(
+          `SELECT id, name FROM children WHERE family_id = ?`
+        )
+          .bind(user.familyId)
+          .all<{ id: string; name: string }>();
+
+        const statsList = [];
+        for (const c of children) {
+          const stats = await getChildWalletSummary(env.DB, c.id);
+          statsList.push({ childId: c.id, childName: c.name, ...stats });
+        }
+
+        return json({ stats: statsList });
+      }
+
+      if (pathname === '/api/parent/settings' && method === 'GET') {
+        const settings = await env.DB.prepare(`SELECT * FROM family_settings WHERE family_id = ?`)
+          .bind(user.familyId)
+          .first();
+        return json({ settings });
+      }
+
+      if (pathname === '/api/parent/settings' && method === 'PUT') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const warningDebt = Number(body.warning_debt_threshold) || -60;
+        const soundEnabled = body.sound_enabled ? 1 : 0;
+        const now = new Date().toISOString();
+
+        await env.DB.prepare(
+          `UPDATE family_settings 
+           SET warning_debt_threshold = ?, sound_enabled = ?, updated_at = ?
+           WHERE family_id = ?`
+        )
+          .bind(warningDebt, soundEnabled, now, user.familyId)
+          .run();
+
+        return json({ success: true, message: 'ההגדרות עודכנו בהצלחה' });
+      }
+
+      if (pathname === '/api/parent/children' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const name = body.name?.trim();
+        const pin = body.pin || '1234';
+        const color = body.color || '#4facfe';
+        const avatar = body.avatar || 'wand';
+
+        if (!name) return errorJson('שם הילד נדרש', 400);
+
+        const pepper = env.PEPPER_SECRET || 'timeplus_pepper_default';
+        const childId = generateId();
+        const salt = generateSalt(16);
+        const pinHash = await hashPin(pin, salt, pepper);
+        const now = new Date().toISOString();
+
+        await env.DB.prepare(
+          `INSERT INTO children (id, family_id, name, pin_hash, pin_salt, avatar, color, available_minutes, debt_limit_minutes, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 30, 60, ?, ?)`
+        )
+          .bind(childId, user.familyId, name, pinHash, salt, avatar, color, now, now)
+          .run();
+
+        await env.DB.prepare(
+          `INSERT INTO child_progress (child_id, family_id, level, xp, current_streak_days, best_streak_days, last_active_date, updated_at)
+           VALUES (?, ?, 1, 0, 1, 1, ?, ?)`
+        )
+          .bind(childId, user.familyId, getIsraelDateString(), now)
+          .run();
+
+        await env.DB.prepare(
+          `INSERT INTO minute_transactions (id, family_id, child_id, type, amount, balance_after, reason, created_by, created_at)
+           VALUES (?, ?, ?, 'earn', 30, 30, 'ברוך הבא לאקדמיית הזמן!', 'parent', ?)`
+        )
+          .bind(generateId(), user.familyId, childId, now)
+          .run();
+
+        return json({ success: true, message: 'הילד נוסף בהצלחה למשפחה', childId });
+      }
+
+      if (pathname.match(/^\/api\/parent\/children\/[^/]+$/) && method === 'PUT') {
+        const childId = pathname.split('/')[4];
+        const body = (await request.json().catch(() => ({}))) as any;
+        const name = body.name?.trim();
+        const color = body.color;
+        const avatar = body.avatar;
+        const pin = body.pin;
+        const now = new Date().toISOString();
+
+        if (pin && pin.length >= 4) {
+          const pepper = env.PEPPER_SECRET || 'timeplus_pepper_default';
+          const salt = generateSalt(16);
+          const pinHash = await hashPin(pin, salt, pepper);
+          await env.DB.prepare(`UPDATE children SET pin_hash = ?, pin_salt = ? WHERE id = ? AND family_id = ?`)
+            .bind(pinHash, salt, childId, user.familyId)
+            .run();
+        }
+
+        await env.DB.prepare(
+          `UPDATE children 
+           SET name = COALESCE(?, name),
+               color = COALESCE(?, color),
+               avatar = COALESCE(?, avatar),
+               updated_at = ?
+           WHERE id = ? AND family_id = ?`
+        )
+          .bind(name, color, avatar, now, childId, user.familyId)
+          .run();
+
+        return json({ success: true, message: 'פרטי הילד עודכנו בהצלחה' });
+      }
+
+      return errorJson('נתיב API לא נמצא', 404);
+    }
+
+    // --- 5. FALLBACK TO WORKERS STATIC ASSETS (SPA) ---
+    // If request is not an API call, serve static asset or SPA index.html
+    return env.ASSETS.fetch(request);
+  },
+
+  // --- 6. CRON TRIGGER (Asia/Jerusalem Daily Task Generation) ---
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const familyId = env.DEFAULT_FAMILY_ID || 'yaniv_family';
+    await ensureDailyTaskInstances(env.DB, familyId);
+  },
+};

@@ -1,0 +1,16 @@
+{
+  "name": "Time+ אקדמיית הזמן",
+  "short_name": "Time+",
+  "description": "מערכת ניהול זמן מסך משפחתית",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070512",
+  "theme_color": "#070512",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

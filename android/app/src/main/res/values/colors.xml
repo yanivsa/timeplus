@@ -1,0 +1,8 @@
+<resources>
+    <color name="bg_night">#070512</color>
+    <color name="gold">#f5c842</color>
+    <color name="purple_dark">#120c2e</color>
+    <color name="magic_purple">#7c3aed</color>
+    <color name="text_bright">#ffffff</color>
+    <color name="text_muted">#c084fc</color>
+</resources>

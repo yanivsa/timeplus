@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+web/dist/
+worker/dist/
+
+# Cloudflare
+.wrangler/
+.mf/
+
+# Environment and secrets (NEVER commit secrets or keys)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+release-keystore.properties
+
+# Android build outputs and SDK local config
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/**/build/
+*.apk
+*.aab
+
+# Testing and coverage
+coverage/
+test-results/
+playwright-report/
+blob-report/
+
+# System and IDE
+.DS_Store
+.idea/
+*.swp
+*.swo
+.vscode/*
+!.vscode/extensions.json
+android/.kotlin/
