@@ -100,3 +100,30 @@ To verify that the Android APK functions as a true evergreen shell capable of re
 ### Cloudflare R2 Object Storage
 - **Issue**: Attempting to provision the Cloudflare R2 bucket `timeplus-media` returned Cloudflare API Error code `10042` (*R2 is not enabled for this account*).
 - **Resolution**: In accordance with the operating rules, photo evidence uploads are guarded behind a feature flag and do not store base64 blobs in Cloudflare D1 (avoiding database bloat). Once R2 is enabled in the Cloudflare dashboard, the storage binding can be activated in `wrangler.toml` without any schema migrations.
+
+---
+
+## 5. Google Play Console Release Package Verification
+
+| Deliverable | Specification / Target | Verification Status | Artifact Location |
+| :--- | :--- | :---: | :--- |
+| **Android App Bundle (.aab)** | Production Signed AAB, Version 1.0.0 (1) | **PASS** (jarsigner verified) | `release-play/timeplus-v1.0.0-release.aab` |
+| **Standalone Release APK** | Production Signed APK, Scheme v2 | **PASS** (apksigner verified) | `release-play/timeplus-v1.0.0-release.apk` |
+| **Signing Upload Keystore** | RSA 2048-bit, valid until Feb 2054 | **PASS** (keytool verified) | `android/keystores/timeplus-upload-key.jks` |
+| **Public RFC Certificate** | X.509 RFC PEM format | **PASS** | `release-play/upload_certificate.pem` |
+| **Privacy Policy (Live)** | Public URL, COPPA & Families Policy | **PASS** (HTTP 200) | `https://timeplus.yanivsa.workers.dev/privacy` |
+| **App Icon** | 512x512 PNG, 32-bit with alpha, <1MB | **PASS** (512x512, 242KB) | `release-play/assets/icon-512.png` |
+| **Feature Graphic** | 1024x500 PNG, RGB no alpha, <15MB | **PASS** (1024x500, 292KB) | `release-play/assets/feature-graphic.png` |
+| **Phone Screenshots** | 16:9 / 9:16 aspect ratio (720x1280) | **PASS** (2 screenshots) | `release-play/assets/screenshot-*.png` |
+| **Store Listing Copy** | Full Hebrew copy & Data Safety forms | **PASS** | `release-play/STORE_LISTING.md` |
+| **Play Console Walkthrough** | Step-by-step instructions for Muse/Yaniv | **PASS** | `release-play/PLAY_CONSOLE_INSTRUCTIONS_FOR_MUSE.md` |
+
+### 5.1 Keystore Fingerprints
+- **Owner/Issuer:** `CN=TimePlus, OU=Family, O=Yaniv, L=Ashdod, C=IL`
+- **SHA-1:** `5D:36:A5:02:71:C8:57:D6:C9:4A:BF:07:69:D4:1A:BE:23:33:74:01`
+- **SHA-256:** `95:BA:F5:D7:A1:38:B6:B2:D8:F0:56:69:56:29:2B:C6:5E:D3:62:E0:08:9A:F1:6E:37:91:9D:F1:66:1D:9C:DA`
+
+---
+
+## 6. Overall Sign-Off
+All explicit requirements and acceptance criteria for **Time+** have been systematically engineered, deployed to production, tested with automated test suites, verified inside an Android emulator with screenshot evidence, signed with a dedicated production upload key, and packaged for Google Play Console distribution.
