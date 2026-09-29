@@ -32,6 +32,7 @@ import {
 } from './wallet';
 import { getRankDetails } from './gamification';
 import { getIsraelDateString } from './timezone';
+import { renderPrivacyPolicyHtml } from './privacy';
 
 function json(data: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
   const headers = new Headers({
@@ -51,6 +52,17 @@ export default {
     const url = new URL(request.url);
     const pathname = url.pathname;
     const method = request.method;
+
+    // --- 0. PRIVACY POLICY (Required by Google Play Console) ---
+    if (pathname === '/privacy' && method === 'GET') {
+      return new Response(renderPrivacyPolicyHtml(), {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=3600',
+        },
+      });
+    }
 
     // --- 1. HEALTH AND VERSION ENDPOINTS ---
     if (pathname === '/healthz' && method === 'GET') {

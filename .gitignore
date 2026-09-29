@@ -46,3 +46,5 @@ blob-report/
 .vscode/*
 !.vscode/extensions.json
 android/.kotlin/
+android/keystores/
+release-play/KEYSTORE_DETAILS.txt

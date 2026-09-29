@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0c071e" />
+      <stop offset="50%" stop-color="#180f3d" />
+      <stop offset="100%" stop-color="#070412" />
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff2b2" />
+      <stop offset="50%" stop-color="#f5c842" />
+      <stop offset="100%" stop-color="#b88307" />
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#6366f1" />
+    </linearGradient>
+    <filter id="magicGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+    <radialGradient id="orbGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.45" />
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="goldOrb" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f5c842" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#f5c842" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="1024" height="500" fill="url(#bg)" />
+
+  <!-- Ambient Glow Orbs -->
+  <circle cx="320" cy="250" r="280" fill="url(#orbGlow)" />
+  <circle cx="720" cy="250" r="240" fill="url(#goldOrb)" />
+
+  <!-- Mystical Stars / Sparkles -->
+  <circle cx="120" cy="90" r="2" fill="#fff" opacity="0.6" />
+  <circle cx="180" cy="380" r="1.5" fill="#f5c842" opacity="0.7" />
+  <circle cx="480" cy="70" r="2.5" fill="#fff" opacity="0.8" />
+  <circle cx="890" cy="120" r="2" fill="#38bdf8" opacity="0.7" />
+  <circle cx="940" cy="390" r="2" fill="#fff" opacity="0.5" />
+  <circle cx="560" cy="420" r="1.5" fill="#f5c842" opacity="0.6" />
+
+  <!-- Left / Center: Mystical Hourglass Emblem -->
+  <g transform="translate(180, 110) scale(2.8)">
+    <!-- Shield / Card Backing -->
+    <rect width="100" height="100" rx="24" fill="#150d36" stroke="url(#gold)" stroke-width="2" />
+    
+    <!-- Hourglass Frame -->
+    <path d="M 28 24 L 72 24 C 74 24 75 26 73 28 L 54 47 C 52 49 52 51 54 53 L 73 72 C 75 74 74 76 72 76 L 28 76 C 26 76 25 74 27 72 L 46 53 C 48 51 48 49 46 47 L 27 28 C 25 26 26 24 28 24 Z" fill="none" stroke="url(#gold)" stroke-width="4.5" stroke-linejoin="round" />
+    <line x1="24" y1="22" x2="76" y2="22" stroke="url(#gold)" stroke-width="5" stroke-linecap="round" />
+    <line x1="24" y1="78" x2="76" y2="78" stroke="url(#gold)" stroke-width="5" stroke-linecap="round" />
+    
+    <!-- Flowing Magic Sand -->
+    <path d="M 36 72 L 64 72 L 53 58 C 51 56 49 56 47 58 Z" fill="#f5c842" opacity="0.9" filter="url(#magicGlow)" />
+    
+    <!-- Plus Badge -->
+    <circle cx="75" cy="27" r="14" fill="#7c3aed" stroke="url(#gold)" stroke-width="2.5" />
+    <path d="M 75 19 L 75 35 M 67 27 L 83 27" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" />
+  </g>
+
+  <!-- Right Side: Clean Typography & Brand Content -->
+  <!-- App Title -->
+  <text x="560" y="210" font-family="-apple-system, system-ui, Arial, sans-serif" font-weight="900" font-size="82" fill="#ffffff" letter-spacing="1">TIME<tspan fill="url(#gold)">+</tspan></text>
+  
+  <!-- Hebrew Subtitle / Tagline -->
+  <text x="565" y="275" font-family="-apple-system, system-ui, Arial, sans-serif" font-weight="700" font-size="32" fill="#e0e7ff" direction="rtl">ניהול זמן מסך ומשימות לכל המשפחה</text>
+  
+  <!-- Pill Badges -->
+  <g transform="translate(565, 315)">
+    <!-- Badge 1: Screen-time currency -->
+    <rect x="0" y="0" width="135" height="36" rx="18" fill="rgba(56, 189, 248, 0.15)" stroke="#38bdf8" stroke-width="1.5" />
+    <text x="67" y="23" font-family="-apple-system, system-ui, Arial, sans-serif" font-weight="600" font-size="16" fill="#38bdf8" text-anchor="middle">דקות מסך</text>
+
+    <!-- Badge 2: Tasks -->
+    <rect x="145" y="0" width="125" height="36" rx="18" fill="rgba(168, 85, 247, 0.15)" stroke="#a855f7" stroke-width="1.5" />
+    <text x="207" y="23" font-family="-apple-system, system-ui, Arial, sans-serif" font-weight="600" font-size="16" fill="#c084fc" text-anchor="middle">משימות יומיות</text>
+
+    <!-- Badge 3: Magic Academy -->
+    <rect x="280" y="0" width="125" height="36" rx="18" fill="rgba(245, 200, 66, 0.15)" stroke="#f5c842" stroke-width="1.5" />
+    <text x="342" y="23" font-family="-apple-system, system-ui, Arial, sans-serif" font-weight="600" font-size="16" fill="#f5c842" text-anchor="middle">אקדמיית קסמים</text>
+  </g>
+
+  <!-- Golden Border Accent -->
+  <rect x="8" y="8" width="1008" height="484" rx="16" fill="none" stroke="rgba(245, 200, 66, 0.25)" stroke-width="1.5" />
+</svg>

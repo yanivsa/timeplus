@@ -101,6 +101,9 @@ class MainActivity : AppCompatActivity() {
         settings.cacheMode = WebSettings.LOAD_DEFAULT
         settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.0"
 
+        val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        WebView.setWebContentsDebuggingEnabled(isDebuggable)
+
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
