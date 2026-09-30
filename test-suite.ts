@@ -86,7 +86,7 @@ async function runAll() {
       const initRes = await api('/api/setup/init', {
         method: 'POST',
         body: JSON.stringify({
-          familyName: 'משפחת שאולקר',
+          familyName: 'המשפחה שלנו',
           parentPin: TEST_PARENT_PIN,
           children: [
             { name: 'אורי', pin: TEST_URI_PIN, color: '#38bdf8', avatar: 'wand' },

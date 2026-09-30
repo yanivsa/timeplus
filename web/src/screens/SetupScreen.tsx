@@ -6,7 +6,7 @@ import { audio } from '../services/audio';
 
 export const SetupScreen: React.FC = () => {
   const { checkStatus, refreshUser } = useAuth();
-  const [familyName, setFamilyName] = useState('משפחת שאולקר');
+  const [familyName, setFamilyName] = useState('המשפחה שלנו');
   const [parentPin, setParentPin] = useState('');
   const [parentPinConfirm, setParentPinConfirm] = useState('');
   const [setupSecret, setSetupSecret] = useState('');
