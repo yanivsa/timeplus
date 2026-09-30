@@ -242,6 +242,14 @@ export const ChildDashboard: React.FC = () => {
   const elapsedSeconds = displayElapsedSeconds % 60;
   const readyScreenRequest = screenSession?.readyRequests?.[0] || null;
 
+  useEffect(() => {
+    if (activeSession?.status !== 'running' || displayRemainingSeconds > 0) return;
+    const timeout = window.setTimeout(() => {
+      loadDashboard();
+    }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [activeSession?.id, activeSession?.status, displayRemainingSeconds]);
+
   if (loading && !data) {
     return (
       <div className="min-h-screen flex items-center justify-center">
