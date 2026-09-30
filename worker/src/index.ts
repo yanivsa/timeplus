@@ -462,7 +462,7 @@ export default {
         const source = String(body.source || 'other');
         const result = await startSelfScreenSession(env.DB, user.familyId, user.id, source);
         if (!result.success) return errorJson(result.error || 'לא ניתן להתחיל ניצול זמן', 400);
-        return json({ success: true, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
+        return json({ ...result, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
       }
 
       if (pathname === '/api/child/screen-session/start' && method === 'POST') {
@@ -491,7 +491,7 @@ export default {
         if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
         const result = await stopScreenSession(env.DB, user.familyId, user.id);
         if (!result.success) return errorJson(result.error || 'לא ניתן לעצור את הטיימר', 400);
-        return json({ success: true, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
+        return json({ ...result, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
       }
 
       if (pathname === '/api/child/history' && method === 'GET') {
