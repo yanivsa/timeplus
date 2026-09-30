@@ -669,12 +669,32 @@ export default {
 
       if (pathname === '/api/parent/tasks/approve-all' && method === 'POST') {
         const { results: pending } = await env.DB.prepare(
-          `SELECT id FROM task_instances WHERE family_id=? AND status='submitted' ORDER BY submitted_at ASC LIMIT 50`
-        ).bind(user.familyId).all<{ id: string }>();
+          `SELECT id, child_id, title, task_kind FROM task_instances
+           WHERE family_id=? AND status='submitted' ORDER BY submitted_at ASC LIMIT 50`
+        ).bind(user.familyId).all<{ id: string; child_id: string; title: string; task_kind: 'mandatory' | 'bonus' }>();
+
         let approvedCount = 0;
         for (const item of pending || []) {
           const result = await approveTask(env.DB, item.id, user.familyId);
-          if (result.success) approvedCount++;
+          if (!result.success) continue;
+          approvedCount++;
+
+          ctx.waitUntil(
+            sendNotification(env.DB, env, {
+              familyId: user.familyId,
+              recipientRole: 'child',
+              recipientChildId: item.child_id,
+              type: 'task_approved',
+              title: item.task_kind === 'mandatory' ? 'משימת חובה אושרה! ⭐' : 'המשימה אושרה! 🪙',
+              message:
+                item.task_kind === 'mandatory'
+                  ? `כל הכבוד! המשימה "${item.title}" אושרה וקיבלת ${result.xpAwarded || 0} XP.`
+                  : `כל הכבוד! המשימה "${item.title}" אושרה וקיבלת +${result.minutesAwarded || 0} דקות.`,
+              entityType: 'task_instance',
+              entityId: item.id,
+              skipDbInsert: true,
+            })
+          );
         }
         return json({ success: true, approvedCount, message: `אושרו ${approvedCount} משימות` });
       }
@@ -693,15 +713,20 @@ export default {
         ctx.waitUntil(
           (async () => {
             try {
-              const task = await env.DB.prepare(`SELECT child_id, title FROM task_instances WHERE id = ?`).bind(instanceId).first<{ child_id: string; title: string }>();
+              const task = await env.DB.prepare(
+                `SELECT child_id, title, task_kind FROM task_instances WHERE id = ?`
+              ).bind(instanceId).first<{ child_id: string; title: string; task_kind: 'mandatory' | 'bonus' }>();
               if (task) {
                 await sendNotification(env.DB, env, {
                   familyId: user.familyId,
                   recipientRole: 'child',
                   recipientChildId: task.child_id,
                   type: 'task_approved',
-                  title: 'המשימה אושרה! 🪙',
-                  message: `כל הכבוד! המשימה "${task.title}" אושרה וקיבלת +${result.minutesAwarded} דקות!`,
+                  title: task.task_kind === 'mandatory' ? 'משימת חובה אושרה! ⭐' : 'המשימה אושרה! 🪙',
+                  message:
+                    task.task_kind === 'mandatory'
+                      ? `כל הכבוד! המשימה "${task.title}" אושרה וקיבלת ${result.xpAwarded || 0} XP.`
+                      : `כל הכבוד! המשימה "${task.title}" אושרה וקיבלת +${result.minutesAwarded || 0} דקות!`,
                   entityType: 'task_instance',
                   entityId: instanceId,
                   skipDbInsert: true,
@@ -715,7 +740,10 @@ export default {
 
         return json({
           success: true,
-          message: 'המשימה אושרה בהצלחה והדקות הועברו לילד',
+          message:
+            (result.minutesAwarded || 0) > 0
+              ? 'המשימה אושרה בהצלחה והדקות הועברו לילד'
+              : 'משימת החובה אושרה בהצלחה ונקודות ה-XP עודכנו',
           minutesAwarded: result.minutesAwarded,
           xpAwarded: result.xpAwarded,
         });
@@ -974,7 +1002,15 @@ export default {
 
         const nextSchedule = scheduleType || current.schedule_type;
         if (!['one_time','daily','weekly','custom','repeatable'].includes(nextSchedule)) return errorJson('תדירות משימה אינה תקינה', 400);
-        if ((nextSchedule === 'weekly' || nextSchedule === 'custom') && (!validDays || validDays.length === 0) && !current.days_of_week) {
+        const switchingToSelectedDays =
+          scheduleType &&
+          scheduleType !== current.schedule_type &&
+          (nextSchedule === 'weekly' || nextSchedule === 'custom');
+        if (
+          (nextSchedule === 'weekly' || nextSchedule === 'custom') &&
+          ((!validDays || validDays.length === 0) &&
+            (switchingToSelectedDays || !current.days_of_week))
+        ) {
           return errorJson('יש לבחור לפחות יום אחד בשבוע', 400);
         }
         const nextDate = oneTimeDate !== undefined ? oneTimeDate : current.one_time_date;
@@ -1225,10 +1261,10 @@ export default {
         const name = body.name?.trim();
         const color = body.color;
         const avatar = body.avatar;
-        const pin = body.pin;
+        const pin = body.pin !== undefined && body.pin !== null ? String(body.pin) : '';
         const now = new Date().toISOString();
 
-        if (pin && pin.length >= 4) {
+        if (pin) {
           if (pin.length < 4) return errorJson('קוד הילד חייב להכיל לפחות 4 ספרות', 400);
           let pepper: string;
           try { pepper = requireActivePepper(env); }
