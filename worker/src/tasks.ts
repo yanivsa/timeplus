@@ -113,6 +113,7 @@ export async function ensureDailyTaskInstances(
             tpl.description,
             tpl.reward_minutes,
             tpl.requires_photo,
+            tpl.task_kind || 'bonus',
             targetDateStr
           )
           .run();
@@ -298,6 +299,7 @@ export async function approveTask(
       ? Math.max(0, customRewardMinutes)
       : instance.reward_minutes;
 
+  const storedRewardMinutes = instance.task_kind === 'mandatory' ? instance.reward_minutes : rewardMinutes;
   const now = new Date().toISOString();
   const todayIsrael = getIsraelDateString();
 
@@ -308,7 +310,7 @@ export async function approveTask(
        SET status = 'approved', reward_minutes = ?, reviewed_at = ?, reviewed_by = 'parent', updated_at = ? 
        WHERE id = ? AND status = 'submitted'`
     )
-    .bind(rewardMinutes, now, now, instanceId)
+    .bind(storedRewardMinutes, now, now, instanceId)
     .run();
 
   if (updateRes.meta.changes === 0) {
