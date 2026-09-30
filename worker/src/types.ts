@@ -68,7 +68,7 @@ export interface Session {
   created_at: string;
 }
 
-export type ScheduleType = 'one_time' | 'daily' | 'weekly' | 'custom';
+export type ScheduleType = 'one_time' | 'daily' | 'weekly' | 'custom' | 'repeatable';
 
 export interface TaskTemplate {
   id: string;

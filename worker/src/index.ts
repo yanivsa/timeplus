@@ -304,8 +304,9 @@ export default {
 
         const todayIsrael = getIsraelDateString();
         const { results: tasks } = await env.DB.prepare(
-          `SELECT ti.*, ts.note as submission_note 
+          `SELECT ti.*, ts.note as submission_note, tt.schedule_type
            FROM task_instances ti
+           LEFT JOIN task_templates tt ON tt.id = ti.template_id
            LEFT JOIN task_submissions ts ON ts.task_instance_id = ti.id AND ts.status = 'pending'
            WHERE ti.child_id = ? AND (ti.due_date = ? OR ti.status = 'submitted')
            ORDER BY 

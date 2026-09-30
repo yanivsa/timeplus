@@ -378,6 +378,11 @@ export const ChildDashboard: React.FC = () => {
                             צילום
                           </span>
                         )}
+                        {task.schedule_type === 'repeatable' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/70 text-amber-300 border border-amber-500/30 font-bold">
+                            אימון חופשי 🔄
+                          </span>
+                        )}
                       </div>
                       {task.description && (
                         <p className="text-xs text-purple-300/70 leading-relaxed">

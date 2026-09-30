@@ -47,6 +47,7 @@ export interface TaskItem {
   requires_photo: number;
   status: 'open' | 'submitted' | 'approved' | 'rejected' | 'expired' | 'cancelled';
   due_date: string;
+  schedule_type?: 'one_time' | 'daily' | 'weekly' | 'custom' | 'repeatable';
   submitted_at: string | null;
   reviewed_at: string | null;
   submission_note?: string;
@@ -109,7 +110,7 @@ export interface TaskTemplateItem {
   title: string;
   description: string | null;
   reward_minutes: number;
-  schedule_type: 'one_time' | 'daily' | 'weekly' | 'custom';
+  schedule_type: 'one_time' | 'daily' | 'weekly' | 'custom' | 'repeatable';
   days_of_week: string | null;
   requires_photo: number;
   is_active: number;

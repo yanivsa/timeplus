@@ -69,7 +69,7 @@ export const ParentDashboard: React.FC = () => {
   const [templateTitle, setTemplateTitle] = useState('');
   const [templateDescription, setTemplateDescription] = useState('');
   const [templateReward, setTemplateReward] = useState<number>(15);
-  const [templateSchedule, setTemplateSchedule] = useState<'daily' | 'weekly' | 'custom'>('daily');
+  const [templateSchedule, setTemplateSchedule] = useState<'daily' | 'weekly' | 'custom' | 'repeatable'>('daily');
   const [templateChildIds, setTemplateChildIds] = useState<string[]>([]);
 
   const [addChildModal, setAddChildModal] = useState(false);
@@ -806,7 +806,16 @@ export const ParentDashboard: React.FC = () => {
                       +{tpl.reward_minutes} דקות
                     </span>
                     <span>•</span>
-                    <span>לו״ז: {tpl.schedule_type === 'daily' ? 'יומי' : tpl.schedule_type}</span>
+                    <span>
+                      לו״ז:{' '}
+                      {tpl.schedule_type === 'daily'
+                        ? 'יומי'
+                        : tpl.schedule_type === 'repeatable'
+                        ? 'אימון חופשי (ללא הגבלה)'
+                        : tpl.schedule_type === 'weekly'
+                        ? 'שבועי'
+                        : 'חד-פעמי'}
+                    </span>
                   </div>
                 </div>
 
@@ -1220,7 +1229,8 @@ export const ParentDashboard: React.FC = () => {
                     onChange={(e) => setTemplateSchedule(e.target.value as any)}
                     className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2 text-xs text-white"
                   >
-                    <option value="daily">יומי</option>
+                    <option value="daily">יומי (פעם ביום)</option>
+                    <option value="repeatable">ללא הגבלה (אימון חוזר / כל פעם מחדש)</option>
                     <option value="weekly">שבועי</option>
                     <option value="one_time">חד-פעמי</option>
                   </select>

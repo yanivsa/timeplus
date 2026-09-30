@@ -25,7 +25,7 @@ export async function ensureDailyTaskInstances(
 
   for (const tpl of templates) {
     let shouldGenerate = false;
-    if (tpl.schedule_type === 'daily') {
+    if (tpl.schedule_type === 'daily' || tpl.schedule_type === 'repeatable') {
       shouldGenerate = true;
     } else if (tpl.schedule_type === 'weekly' || tpl.schedule_type === 'custom') {
       if (tpl.days_of_week) {
@@ -51,6 +51,42 @@ export async function ensureDailyTaskInstances(
       .all<{ child_id: string }>();
 
     for (const assignment of assignments) {
+      if (tpl.schedule_type === 'repeatable') {
+        // For repeatable tasks, ensure there is always at least one 'open' instance available
+        const existingOpen = await db
+          .prepare(
+            `SELECT id FROM task_instances 
+             WHERE template_id = ? AND child_id = ? AND status = 'open'`
+          )
+          .bind(tpl.id, assignment.child_id)
+          .first();
+
+        if (!existingOpen) {
+          const instanceId = generateId();
+          await db
+            .prepare(
+              `INSERT INTO task_instances (
+                id, family_id, template_id, child_id, title, description, 
+                reward_minutes, requires_photo, status, due_date, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+            )
+            .bind(
+              instanceId,
+              familyId,
+              tpl.id,
+              assignment.child_id,
+              tpl.title,
+              tpl.description,
+              tpl.reward_minutes,
+              tpl.requires_photo,
+              targetDateStr
+            )
+            .run();
+          createdCount++;
+        }
+        continue;
+      }
+
       // Check if instance already exists for this template, child, and date
       const existing = await db
         .prepare(
@@ -177,6 +213,43 @@ export async function submitTask(
       now
     )
     .run();
+
+  // If this task was generated from a repeatable template, spawn the next open instance immediately
+  if (instance.template_id) {
+    const tpl = await db
+      .prepare(
+        `SELECT schedule_type, title, description, reward_minutes, requires_photo 
+         FROM task_templates 
+         WHERE id = ? AND is_active = 1 AND archived_at IS NULL`
+      )
+      .bind(instance.template_id)
+      .first<{ schedule_type: string; title: string; description: string | null; reward_minutes: number; requires_photo: number }>();
+
+    if (tpl && tpl.schedule_type === 'repeatable') {
+      const nextInstanceId = generateId();
+      await db
+        .prepare(
+          `INSERT INTO task_instances (
+            id, family_id, template_id, child_id, title, description, 
+            reward_minutes, requires_photo, status, due_date, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
+        )
+        .bind(
+          nextInstanceId,
+          instance.family_id,
+          instance.template_id,
+          childId,
+          tpl.title,
+          tpl.description,
+          tpl.reward_minutes,
+          tpl.requires_photo,
+          getIsraelDateString(),
+          now,
+          now
+        )
+        .run();
+    }
+  }
 
   return { success: true };
 }
