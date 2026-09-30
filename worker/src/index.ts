@@ -33,7 +33,15 @@ import {
 } from './wallet';
 import { getRankDetails } from './gamification';
 import { getIsraelDateString } from './timezone';
-import { getScreenSessionState, startScreenSession, pauseScreenSession, resumeScreenSession, stopScreenSession } from './screen-sessions';
+import {
+  getScreenSessionState,
+  getFamilyActiveScreenSessions,
+  startScreenSession,
+  startSelfScreenSession,
+  pauseScreenSession,
+  resumeScreenSession,
+  stopScreenSession,
+} from './screen-sessions';
 import { renderPrivacyPolicyHtml } from './privacy';
 import {
   savePushSubscription,
@@ -421,6 +429,7 @@ export default {
               const child = await env.DB.prepare(`SELECT name FROM children WHERE id = ?`).bind(childId).first<{ name: string }>();
               const sourceHebrew =
                 source === 'playstation' ? 'פלייסטיישן' :
+                source === 'vr' ? 'VR' :
                 source === 'tv' ? 'טלוויזיה' :
                 source === 'tablet' ? 'טאבלט' :
                 source === 'phone' ? 'טלפון' : source;
@@ -446,6 +455,15 @@ export default {
       if (pathname === '/api/child/screen-session' && method === 'GET') {
         if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
         return json(await getScreenSessionState(env.DB, user.familyId, user.id));
+      }
+
+      if (pathname === '/api/child/screen-session/self-start' && method === 'POST') {
+        if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
+        const body = (await request.json().catch(() => ({}))) as any;
+        const source = String(body.source || 'other');
+        const result = await startSelfScreenSession(env.DB, user.familyId, user.id, source);
+        if (!result.success) return errorJson(result.error || 'לא ניתן להתחיל ניצול זמן', 400);
+        return json({ ...result, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
       }
 
       if (pathname === '/api/child/screen-session/start' && method === 'POST') {
@@ -474,7 +492,7 @@ export default {
         if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
         const result = await stopScreenSession(env.DB, user.familyId, user.id);
         if (!result.success) return errorJson(result.error || 'לא ניתן לעצור את הטיימר', 400);
-        return json({ success: true, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
+        return json({ ...result, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
       }
 
       if (pathname === '/api/child/history' && method === 'GET') {
@@ -634,10 +652,13 @@ export default {
           .bind(user.familyId)
           .first<{ count: number }>();
 
+        const activeScreenSessions = await getFamilyActiveScreenSessions(env.DB, user.familyId);
+
         return json({
           children: childrenSummaries,
           totalPendingTasks: totalPendingTasks?.count || 0,
           totalPendingRequests: totalPendingRequests?.count || 0,
+          activeScreenSessions,
         });
       }
 
