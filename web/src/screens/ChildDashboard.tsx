@@ -25,6 +25,7 @@ import {
   TrendingUp,
   TrendingDown,
 } from 'lucide-react';
+import { NotificationBell } from '../components/NotificationBell';
 
 export const ChildDashboard: React.FC = () => {
   const { user, logout } = useAuth();
@@ -193,16 +194,19 @@ export const ChildDashboard: React.FC = () => {
           </div>
         </div>
 
-        <button
-          onClick={() => {
-            audio.playTap();
-            logout();
-          }}
-          className="p-2 rounded-xl bg-night-900 border border-purple-500/20 text-purple-400 hover:text-purple-200 active:scale-95 transition"
-          title="התנתק"
-        >
-          <LogOut className="h-5 w-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          <NotificationBell userRole="child" childId={user?.id} />
+          <button
+            onClick={() => {
+              audio.playTap();
+              logout();
+            }}
+            className="p-2 rounded-xl bg-night-900 border border-purple-500/20 text-purple-400 hover:text-purple-200 active:scale-95 transition"
+            title="התנתק"
+          >
+            <LogOut className="h-5 w-5" />
+          </button>
+        </div>
       </header>
 
       {/* Status banner */}

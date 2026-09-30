@@ -10,6 +10,9 @@ export interface Env {
   PHOTOS?: R2Bucket;
   WEB_VERSION?: string;
   API_VERSION?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
 }
 
 export type UserRole = 'parent' | 'child';

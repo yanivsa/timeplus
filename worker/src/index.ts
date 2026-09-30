@@ -33,6 +33,14 @@ import {
 import { getRankDetails } from './gamification';
 import { getIsraelDateString } from './timezone';
 import { renderPrivacyPolicyHtml } from './privacy';
+import {
+  DEFAULT_VAPID_PUBLIC_KEY,
+  savePushSubscription,
+  removePushSubscription,
+  getNotifications,
+  markNotificationsAsRead,
+  sendNotification,
+} from './notifications';
 
 function json(data: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
   const headers = new Headers({
@@ -337,6 +345,29 @@ export default {
         if (!result.success) {
           return errorJson(result.error || 'הגשת המשימה נכשלה', 400);
         }
+
+        // Push notification to parents
+        ctx.waitUntil(
+          (async () => {
+            try {
+              const child = await env.DB.prepare(`SELECT name FROM children WHERE id = ?`).bind(childId).first<{ name: string }>();
+              const instance = await env.DB.prepare(`SELECT title FROM task_instances WHERE id = ?`).bind(instanceId).first<{ title: string }>();
+              await sendNotification(env.DB, env, {
+                familyId: user.familyId,
+                recipientRole: 'parent',
+                type: 'task_submitted',
+                title: 'משימה הוגשה לאישור! 📝',
+                message: `${child?.name || 'הילד/ה'} הגיש/ה את המשימה "${instance?.title || 'משימה'}" וממתין/ה לאישורך`,
+                entityType: 'task_instance',
+                entityId: instanceId,
+                skipDbInsert: true,
+              });
+            } catch (err) {
+              console.error('Failed to dispatch task submission push:', err);
+            }
+          })()
+        );
+
         return json({ success: true, message: 'המשימה נשלחה לאישור ההורים!' });
       }
 
@@ -352,6 +383,33 @@ export default {
         if (!result.success) {
           return errorJson(result.error || 'הבקשה נכשלה', 400);
         }
+
+        // Push notification to parents
+        ctx.waitUntil(
+          (async () => {
+            try {
+              const child = await env.DB.prepare(`SELECT name FROM children WHERE id = ?`).bind(childId).first<{ name: string }>();
+              const sourceHebrew =
+                source === 'playstation' ? 'פלייסטיישן' :
+                source === 'tv' ? 'טלוויזיה' :
+                source === 'tablet' ? 'טאבלט' :
+                source === 'phone' ? 'טלפון' : source;
+
+              await sendNotification(env.DB, env, {
+                familyId: user.familyId,
+                recipientRole: 'parent',
+                type: 'screen_request',
+                title: 'בקשת זמן מסך חדשה 📱',
+                message: `${child?.name || 'הילד/ה'} מבקש/ת ${minutes} דקות עבור ${sourceHebrew}`,
+                entityType: 'screen_time_request',
+                skipDbInsert: true,
+              });
+            } catch (err) {
+              console.error('Failed to dispatch screen request push:', err);
+            }
+          })()
+        );
+
         return json({ success: true, message: 'בקשת זמן המסך נשלחה להורים!' });
       }
 
@@ -393,32 +451,58 @@ export default {
         return json({ event: event || null });
       }
 
-      // --- NOTIFICATIONS (Accessible by both parent and child) ---
-      if (pathname === '/api/notifications' && method === 'GET') {
-        const { results: notifications } = await env.DB.prepare(
-          `SELECT * FROM notifications 
-           WHERE family_id = ? 
-             AND (recipient_role = ? OR (recipient_role = 'child' AND recipient_child_id = ?))
-           ORDER BY created_at DESC LIMIT 30`
-        )
-          .bind(user.familyId, user.role, user.role === 'child' ? user.id : '')
-          .all();
+      // --- NOTIFICATIONS & PUSH (Accessible by both parent and child) ---
+      if (pathname === '/api/push/vapid-public-key' && method === 'GET') {
+        return json({
+          publicKey: env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY,
+        });
+      }
 
-        return json({ notifications });
+      if (pathname === '/api/push/subscribe' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const subscription = body.subscription;
+        if (!subscription || !subscription.endpoint || !subscription.keys?.p256dh || !subscription.keys?.auth) {
+          return errorJson('מבנה מנוי התראות אינו תקין', 400);
+        }
+
+        await savePushSubscription(
+          env.DB,
+          user.familyId,
+          user.role,
+          user.role === 'child' ? user.id : null,
+          subscription,
+          request.headers.get('User-Agent') || undefined
+        );
+
+        return json({ success: true, message: 'ההתראות הופעלו במכשיר זה בהצלחה!' });
+      }
+
+      if (pathname === '/api/push/unsubscribe' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        if (body.endpoint) {
+          await removePushSubscription(env.DB, body.endpoint);
+        }
+        return json({ success: true });
+      }
+
+      if (pathname === '/api/notifications' && method === 'GET') {
+        const data = await getNotifications(
+          env.DB,
+          user.familyId,
+          user.role,
+          user.role === 'child' ? user.id : null,
+          30
+        );
+        return json(data);
       }
 
       if (pathname === '/api/notifications/read-all' && method === 'POST') {
-        const now = new Date().toISOString();
-        await env.DB.prepare(
-          `UPDATE notifications 
-           SET read_at = ? 
-           WHERE family_id = ? 
-             AND read_at IS NULL
-             AND (recipient_role = ? OR (recipient_role = 'child' AND recipient_child_id = ?))`
-        )
-          .bind(now, user.familyId, user.role, user.role === 'child' ? user.id : '')
-          .run();
-
+        await markNotificationsAsRead(
+          env.DB,
+          user.familyId,
+          user.role,
+          user.role === 'child' ? user.id : null
+        );
         return json({ success: true });
       }
 
@@ -529,6 +613,31 @@ export default {
         if (!result.success) {
           return errorJson(result.error || 'אישור המשימה נכשל', 400);
         }
+
+        // Push notification to child
+        ctx.waitUntil(
+          (async () => {
+            try {
+              const task = await env.DB.prepare(`SELECT child_id, title FROM task_instances WHERE id = ?`).bind(instanceId).first<{ child_id: string; title: string }>();
+              if (task) {
+                await sendNotification(env.DB, env, {
+                  familyId: user.familyId,
+                  recipientRole: 'child',
+                  recipientChildId: task.child_id,
+                  type: 'task_approved',
+                  title: 'המשימה אושרה! 🪙',
+                  message: `כל הכבוד! המשימה "${task.title}" אושרה וקיבלת +${result.minutesAwarded} דקות!`,
+                  entityType: 'task_instance',
+                  entityId: instanceId,
+                  skipDbInsert: true,
+                });
+              }
+            } catch (err) {
+              console.error('Failed to dispatch task approval push:', err);
+            }
+          })()
+        );
+
         return json({
           success: true,
           message: 'המשימה אושרה בהצלחה והדקות הועברו לילד',
@@ -559,6 +668,38 @@ export default {
         if (!result.success) {
           return errorJson(result.error || 'הפעולה נכשלה', 400);
         }
+
+        // Push notification to child
+        ctx.waitUntil(
+          (async () => {
+            try {
+              const req = await env.DB.prepare(`SELECT child_id, source FROM screen_time_requests WHERE id = ?`).bind(requestId).first<{ child_id: string; source: string }>();
+              if (req) {
+                const sourceHebrew =
+                  req.source === 'playstation' ? 'פלייסטיישן' :
+                  req.source === 'tv' ? 'טלוויזיה' :
+                  req.source === 'tablet' ? 'טאבלט' :
+                  req.source === 'phone' ? 'טלפון' : req.source;
+
+                await sendNotification(env.DB, env, {
+                  familyId: user.familyId,
+                  recipientRole: 'child',
+                  recipientChildId: req.child_id,
+                  type: approved ? 'screen_approved' : 'screen_rejected',
+                  title: approved ? 'זמן המסך אושר! 🎉' : 'עדכון לגבי בקשת זמן מסך',
+                  message: approved
+                    ? `ההורים אישרו לך ${result.deductedMinutes || ''} דקות עבור ${sourceHebrew}! צפייה מהנה`
+                    : `בקשת זמן המסך עבור ${sourceHebrew} לא אושרה כעת`,
+                  entityType: 'screen_time_request',
+                  entityId: requestId,
+                  skipDbInsert: true,
+                });
+              }
+            } catch (err) {
+              console.error('Failed to dispatch screen review push:', err);
+            }
+          })()
+        );
         return json({
           success: true,
           message: approved ? 'בקשת זמן המסך אושרה והדקות נוכו' : 'בקשת זמן המסך נדחתה',
@@ -620,6 +761,26 @@ export default {
         if (!result.success) {
           return errorJson(result.error || 'עדכון דקות נכשל', 400);
         }
+
+        if (minutesDelta > 0) {
+          ctx.waitUntil(
+            (async () => {
+              try {
+                await sendNotification(env.DB, env, {
+                  familyId: user.familyId,
+                  recipientRole: 'child',
+                  recipientChildId: childId,
+                  type: 'manual_bonus',
+                  title: 'קיבלת תוספת דקות! 🎁',
+                  message: `ההורים הוסיפו לך +${minutesDelta} דקות${reason ? `: ${reason}` : ''}!`,
+                });
+              } catch (err) {
+                console.error('Failed to dispatch bonus push:', err);
+              }
+            })()
+          );
+        }
+
         return json({
           success: true,
           message: 'היתרה עודכנה בהצלחה',

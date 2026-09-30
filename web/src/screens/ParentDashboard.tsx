@@ -34,6 +34,7 @@ import {
   VolumeX,
   UserPlus,
 } from 'lucide-react';
+import { NotificationBell } from '../components/NotificationBell';
 
 export const ParentDashboard: React.FC = () => {
   const { user, logout, familyName } = useAuth();
@@ -477,6 +478,8 @@ export const ParentDashboard: React.FC = () => {
           >
             <Settings className="h-4 w-4" />
           </button>
+
+          <NotificationBell userRole="parent" />
 
           <button
             onClick={() => {
