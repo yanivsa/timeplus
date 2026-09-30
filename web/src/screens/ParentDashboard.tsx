@@ -56,6 +56,7 @@ export const ParentDashboard: React.FC = () => {
 
   // Data
   const [children, setChildren] = useState<ChildSummary[]>([]);
+  const [activeScreenSessions, setActiveScreenSessions] = useState<any[]>([]);
   const [pendingTasks, setPendingTasks] = useState<PendingApprovalItem[]>([]);
   const [pendingRequests, setPendingRequests] = useState<ScreenTimeRequestItem[]>([]);
   const [templates, setTemplates] = useState<TaskTemplateItem[]>([]);
@@ -119,6 +120,7 @@ export const ParentDashboard: React.FC = () => {
     try {
       const res = await apiRequest('/api/parent/dashboard');
       setChildren(res.children || []);
+      setActiveScreenSessions(res.activeScreenSessions || []);
 
       const approvalsRes = await apiRequest('/api/parent/approvals');
       setPendingTasks(approvalsRes.pendingTasks || []);
@@ -658,6 +660,50 @@ export const ParentDashboard: React.FC = () => {
       {/* --- TAB 1: OVERVIEW --- */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
+          {activeScreenSessions.length > 0 && (
+            <div className="space-y-2">
+              {activeScreenSessions.map((session) => {
+                const sourceLabel =
+                  session.source === 'playstation' ? 'PlayStation' :
+                  session.source === 'vr' ? 'VR' :
+                  session.source === 'tv' ? 'טלוויזיה' :
+                  session.source === 'computer' ? 'מחשב' :
+                  session.source === 'tablet' ? 'טאבלט' :
+                  session.source === 'phone' ? 'טלפון' :
+                  session.source === 'youtube' ? 'YouTube' : 'אחר';
+                const elapsedMinutes = Math.max(0, Math.floor(Number(session.elapsed_now || 0) / 60));
+                const remainingMinutes = Math.max(0, Math.ceil(Number(session.remaining_now || 0) / 60));
+
+                return (
+                  <div
+                    key={session.id}
+                    className="rounded-2xl border border-cyan-500/30 bg-cyan-950/20 px-4 py-3 flex items-center justify-between gap-3"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Clock className="h-4 w-4 text-cyan-300 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-white truncate">
+                          {session.child_name} · {sourceLabel}
+                        </div>
+                        <div className="text-[11px] text-cyan-200/80">
+                          {session.status === 'paused'
+                            ? 'מושהה'
+                            : session.mode === 'self'
+                            ? `משתמש עכשיו · ${elapsedMinutes} דקות`
+                            : `זמן מסך פעיל · נותרו ${remainingMinutes} דקות`}
+                        </div>
+                      </div>
+                    </div>
+                    <span
+                      className="h-2.5 w-2.5 rounded-full shrink-0 animate-pulse"
+                      style={{ backgroundColor: session.child_color || '#22d3ee' }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {/* Quick Actions Row */}
           <div className="flex flex-wrap items-center gap-3">
             <button
