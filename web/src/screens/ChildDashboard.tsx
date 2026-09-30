@@ -42,8 +42,11 @@ export const ChildDashboard: React.FC = () => {
 
   const [showScreenRequestModal, setShowScreenRequestModal] = useState(false);
   const [requestMinutes, setRequestMinutes] = useState(30);
+  const [customRequestMinutes, setCustomRequestMinutes] = useState(false);
   const [requestSource, setRequestSource] = useState('playstation');
   const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [showSelfUsageModal, setShowSelfUsageModal] = useState(false);
+  const [selfUsageSource, setSelfUsageSource] = useState('vr');
   const [screenSession, setScreenSession] = useState<any>({ activeSession: null, readyRequests: [] });
   const [screenSessionLoadedAt, setScreenSessionLoadedAt] = useState(Date.now());
   const [timerTick, setTimerTick] = useState(Date.now());
@@ -128,6 +131,11 @@ export const ChildDashboard: React.FC = () => {
 
   const handleRequestScreenTime = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!Number.isInteger(requestMinutes) || requestMinutes <= 0) {
+      setStatusMessage('יש להזין מספר דקות תקין');
+      return;
+    }
+
     audio.playTap();
     setSubmittingRequest(true);
     setStatusMessage(null);
@@ -153,9 +161,40 @@ export const ChildDashboard: React.FC = () => {
     }
   };
 
+  const handleStartSelfUsage = async () => {
+    if (screenSessionBusy) return;
+    setScreenSessionBusy(true);
+    setStatusMessage(null);
+
+    try {
+      const res = await apiRequest('/api/child/screen-session/self-start', {
+        method: 'POST',
+        body: JSON.stringify({ source: selfUsageSource }),
+      });
+      setScreenSession(res);
+      setScreenSessionLoadedAt(Date.now());
+      setShowSelfUsageModal(false);
+      audio.playTap();
+      setStatusMessage('הטיימר התחיל — כשתסיים לחץ "סיימתי".');
+    } catch (err: any) {
+      audio.playReject();
+      setStatusMessage(err.message || 'לא ניתן להתחיל את הטיימר');
+    } finally {
+      setScreenSessionBusy(false);
+    }
+  };
+
   const handleScreenSessionAction = async (action: 'start' | 'pause' | 'resume' | 'stop', requestId?: string) => {
     if (screenSessionBusy) return;
-    if (action === 'stop' && !confirm('לסיים את זמן המסך? הזמן שנותר בסשן הזה לא יוחזר לארנק.')) return;
+
+    if (action === 'stop') {
+      const isSelfUsage = activeSession?.mode === 'self';
+      const message = isSelfUsage
+        ? 'לסיים את השימוש? ינוכו רק הדקות שנוצלו בפועל.'
+        : 'לסיים את זמן המסך? הזמן שנותר בסשן הזה לא יוחזר לארנק.';
+      if (!confirm(message)) return;
+    }
+
     setScreenSessionBusy(true);
     try {
       const res = await apiRequest(`/api/child/screen-session/${action}`, {
@@ -165,6 +204,15 @@ export const ChildDashboard: React.FC = () => {
       setScreenSession(res);
       setScreenSessionLoadedAt(Date.now());
       audio.playTap();
+
+      if (action === 'stop' && res.mode === 'self') {
+        setStatusMessage(
+          res.spentMinutes > 0
+            ? `סיימת! נרשמו ${res.spentMinutes} דקות ניצול.`
+            : 'הטיימר נסגר ללא ניצול דקות.'
+        );
+        await loadDashboard();
+      }
     } catch (err: any) {
       audio.playReject();
       setStatusMessage(err.message || 'פעולת הטיימר נכשלה');
@@ -180,8 +228,18 @@ export const ChildDashboard: React.FC = () => {
       ? Math.max(0, Math.floor((timerTick - screenSessionLoadedAt) / 1000))
       : 0;
   const displayRemainingSeconds = Math.max(0, baseRemaining - elapsedSinceLoad);
+  const baseElapsed = Number(
+    activeSession?.elapsed_now ??
+      Math.max(0, Number(activeSession?.allocated_seconds || 0) - baseRemaining)
+  );
+  const displayElapsedSeconds = Math.max(
+    0,
+    Math.min(Number(activeSession?.allocated_seconds || 0), baseElapsed + elapsedSinceLoad)
+  );
   const displayMinutes = Math.floor(displayRemainingSeconds / 60);
   const displaySeconds = displayRemainingSeconds % 60;
+  const elapsedMinutes = Math.floor(displayElapsedSeconds / 60);
+  const elapsedSeconds = displayElapsedSeconds % 60;
   const readyScreenRequest = screenSession?.readyRequests?.[0] || null;
 
   if (loading && !data) {
@@ -201,9 +259,10 @@ export const ChildDashboard: React.FC = () => {
   const pendingCount = data?.pendingSubmissionsCount || 0;
   const recommendedTask = data?.recommendedTask;
 
-  const quickMinutes = [10, 15, 20, 30, 45, 60];
+  const quickMinutes = [10, 15, 20, 30];
   const sources = [
     { id: 'playstation', label: 'PlayStation', icon: Gamepad2 },
+    { id: 'vr', label: 'VR', icon: Gamepad2 },
     { id: 'tv', label: 'טלוויזיה', icon: Tv },
     { id: 'computer', label: 'מחשב', icon: Monitor },
     { id: 'tablet', label: 'טאבלט', icon: Tablet },
@@ -328,12 +387,24 @@ export const ChildDashboard: React.FC = () => {
         </button>
 
         <button
+          disabled={!!activeSession || (wallet?.availableMinutes ?? 0) <= 0}
+          onClick={() => {
+            audio.playTap();
+            setShowSelfUsageModal(true);
+          }}
+          className="flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 active:scale-95 transition-all text-white font-bold text-sm shadow-lg shadow-cyan-950/30 disabled:opacity-40 disabled:active:scale-100"
+        >
+          <Clock className="h-5 w-5" />
+          <span>{activeSession ? 'טיימר פעיל' : 'התחל ניצול זמן'}</span>
+        </button>
+
+        <button
           onClick={() => {
             audio.playTap();
             loadHistory();
             setShowHistoryModal(true);
           }}
-          className="flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl bg-night-900 hover:bg-night-850 border border-purple-500/30 active:scale-95 transition-all text-purple-200 font-bold text-sm"
+          className="col-span-2 flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-night-900 hover:bg-night-850 border border-purple-500/30 active:scale-95 transition-all text-purple-200 font-bold text-sm"
         >
           <History className="h-5 w-5 text-purple-400" />
           <span>היסטוריית דקות</span>
@@ -346,13 +417,26 @@ export const ChildDashboard: React.FC = () => {
             <div className="space-y-3 text-center">
               <div className="flex items-center justify-center gap-2 text-cyan-300 text-xs font-bold">
                 <Clock className="h-4 w-4" />
-                <span>{activeSession.status === 'paused' ? 'זמן המסך מושהה' : 'זמן מסך פעיל'}</span>
+                <span>
+                  {activeSession.mode === 'self'
+                    ? activeSession.status === 'paused'
+                      ? 'ניצול הזמן מושהה'
+                      : 'ניצול זמן פעיל'
+                    : activeSession.status === 'paused'
+                    ? 'זמן המסך מושהה'
+                    : 'זמן מסך פעיל'}
+                </span>
               </div>
               <div className="text-5xl font-black font-mono text-white tracking-tight" dir="ltr">
-                {String(displayMinutes).padStart(2, '0')}:{String(displaySeconds).padStart(2, '0')}
+                {activeSession.mode === 'self'
+                  ? `${String(elapsedMinutes).padStart(2, '0')}:${String(elapsedSeconds).padStart(2, '0')}`
+                  : `${String(displayMinutes).padStart(2, '0')}:${String(displaySeconds).padStart(2, '0')}`}
               </div>
               <div className="text-[11px] text-purple-300">
-                {activeSession.source} · מתוך {Math.round((activeSession.allocated_seconds || 0) / 60)} דקות
+                {sources.find((s) => s.id === activeSession.source)?.label || activeSession.source}
+                {activeSession.mode === 'self'
+                  ? ` · מתוך יתרה של ${Math.round((activeSession.allocated_seconds || 0) / 60)} דקות`
+                  : ` · מתוך ${Math.round((activeSession.allocated_seconds || 0) / 60)} דקות`}
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {activeSession.status === 'running' ? (
@@ -623,17 +707,18 @@ export const ChildDashboard: React.FC = () => {
                 <label className="block text-xs font-semibold text-purple-200 mb-2">
                   כמה דקות תרצה לבקש?
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {quickMinutes.map((m) => (
                     <button
                       key={m}
                       type="button"
                       onClick={() => {
                         audio.playTap();
+                        setCustomRequestMinutes(false);
                         setRequestMinutes(m);
                       }}
                       className={`py-2 rounded-xl text-sm font-bold font-cinzel border transition-all ${
-                        requestMinutes === m
+                        !customRequestMinutes && requestMinutes === m
                           ? 'bg-gold-500 text-night-950 border-gold-400 shadow-md'
                           : 'bg-night-950 text-purple-200 border-purple-500/20 hover:border-purple-400/40'
                       }`}
@@ -641,7 +726,41 @@ export const ChildDashboard: React.FC = () => {
                       {m} דק׳
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      audio.playTap();
+                      setCustomRequestMinutes(true);
+                    }}
+                    className={`col-span-2 py-2 rounded-xl text-sm font-bold border transition-all ${
+                      customRequestMinutes
+                        ? 'bg-gold-500 text-night-950 border-gold-400 shadow-md'
+                        : 'bg-night-950 text-purple-200 border-purple-500/20 hover:border-purple-400/40'
+                    }`}
+                  >
+                    מותאם אישית
+                  </button>
                 </div>
+
+                {customRequestMinutes && (
+                  <div className="mt-3">
+                    <input
+                      type="number"
+                      min="1"
+                      max={Math.max(1, wallet?.availableMinutes ?? 1)}
+                      step="1"
+                      inputMode="numeric"
+                      value={requestMinutes}
+                      onChange={(e) => setRequestMinutes(Number(e.target.value))}
+                      placeholder="כמה דקות?"
+                      autoFocus
+                      className="w-full rounded-xl bg-night-950 border border-gold-500/40 p-3 text-lg font-mono text-center text-white focus:outline-none focus:border-gold-400"
+                    />
+                    <p className="mt-1.5 text-[10px] text-purple-400 text-center">
+                      אפשר לבקש כל מספר דקות עד היתרה הזמינה
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -692,7 +811,65 @@ export const ChildDashboard: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 3: HISTORY LEDGER */}
+      {/* MODAL 3: SELF-REPORTED USAGE */}
+      {showSelfUsageModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night-950/80 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm rounded-3xl bg-night-900 border border-cyan-500/40 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-base text-cyan-300 font-cinzel">התחל ניצול זמן</h3>
+              <button
+                onClick={() => setShowSelfUsageModal(false)}
+                className="p-1 text-purple-400 hover:text-white"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-purple-300 mb-4 leading-5">
+              בחר במה אתה משתמש. הטיימר יספור את הזמן בפועל, ובסיום ינוכו רק הדקות שנוצלו.
+            </p>
+            <p className="text-xs text-purple-300 mb-4">
+              יתרה זמינה: <strong className="text-gold-400">{wallet?.availableMinutes ?? 0} דקות</strong>
+            </p>
+
+            <div className="grid grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1 mb-4">
+              {sources.map((s) => {
+                const Icon = s.icon;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      audio.playTap();
+                      setSelfUsageSource(s.id);
+                    }}
+                    className={`flex items-center gap-2 p-2.5 rounded-xl border text-xs font-semibold transition-all ${
+                      selfUsageSource === s.id
+                        ? 'bg-cyan-600/30 border-cyan-400 text-white shadow-sm'
+                        : 'bg-night-950 text-purple-300 border-purple-500/20 hover:border-purple-400/30'
+                    }`}
+                  >
+                    <Icon className="h-4 w-4 shrink-0 text-gold-400" />
+                    <span className="truncate">{s.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              disabled={screenSessionBusy || (wallet?.availableMinutes ?? 0) <= 0}
+              onClick={handleStartSelfUsage}
+              className="w-full py-3 rounded-2xl font-bold text-white bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 active:scale-95 transition flex items-center justify-center gap-2 text-sm shadow-lg shadow-cyan-950/30 disabled:opacity-40"
+            >
+              <Clock className="h-4 w-4" />
+              <span>{screenSessionBusy ? 'מתחיל...' : 'התחל טיימר'}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 4: HISTORY LEDGER */}
       {showHistoryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night-950/80 backdrop-blur-sm animate-fade-in">
           <div className="w-full max-w-sm rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl flex flex-col max-h-[85vh]">
