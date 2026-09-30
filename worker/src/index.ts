@@ -92,6 +92,12 @@ export default {
       });
     }
 
+    if (pathname === '/api/push/vapid-public-key' && method === 'GET') {
+      return json({
+        publicKey: env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY,
+      });
+    }
+
     // --- 2. SETUP & INITIALIZATION ---
     if (pathname === '/api/setup/status' && method === 'GET') {
       const initialized = await isSystemInitialized(env.DB);
