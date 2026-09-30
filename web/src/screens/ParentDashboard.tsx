@@ -1350,6 +1350,7 @@ export const ParentDashboard: React.FC = () => {
                   className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-3 text-sm text-white focus:outline-none focus:border-gold-400"
                 >
                   <option value="playstation">PlayStation</option>
+                  <option value="vr">VR</option>
                   <option value="tv">טלוויזיה</option>
                   <option value="computer">מחשב</option>
                   <option value="tablet">טאבלט</option>
