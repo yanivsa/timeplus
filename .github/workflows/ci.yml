@@ -19,21 +19,16 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: |
-            web/package-lock.json
-            worker/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install & Build Web Frontend
-        run: |
-          cd web
-          npm ci
-          npm run build
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Install & Check Worker
-        run: |
-          cd worker
-          npm ci
-          npx tsc --noEmit
+      - name: Build Web Frontend
+        run: npm run build:web
+
+      - name: Typecheck Worker
+        run: npx tsc --noEmit -p worker/tsconfig.json
 
   android:
     name: Build Android APK

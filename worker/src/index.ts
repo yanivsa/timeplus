@@ -9,7 +9,8 @@ import {
   recordLoginAttempt,
   parseCookies,
 } from './auth';
-import { verifyPin, hashPin, generateSalt, generateId } from './crypto';
+import { hashPin, generateSalt, generateId } from './crypto';
+import { requireActivePepper, verifyPinWithPepperMigration } from './pin-security';
 import {
   isSystemInitialized,
   getPublicChildrenList,
@@ -32,9 +33,9 @@ import {
 } from './wallet';
 import { getRankDetails } from './gamification';
 import { getIsraelDateString } from './timezone';
+import { getScreenSessionState, startScreenSession, pauseScreenSession, resumeScreenSession, stopScreenSession } from './screen-sessions';
 import { renderPrivacyPolicyHtml } from './privacy';
 import {
-  DEFAULT_VAPID_PUBLIC_KEY,
   savePushSubscription,
   removePushSubscription,
   getNotifications,
@@ -93,9 +94,8 @@ export default {
     }
 
     if (pathname === '/api/push/vapid-public-key' && method === 'GET') {
-      return json({
-        publicKey: env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY,
-      });
+      if (!env.VAPID_PUBLIC_KEY) return errorJson('Push notifications are not configured', 503);
+      return json({ publicKey: env.VAPID_PUBLIC_KEY });
     }
 
     // --- 2. SETUP & INITIALIZATION ---
@@ -157,7 +157,9 @@ export default {
         );
       }
 
-      const pepper = env.PEPPER_SECRET || 'timeplus_pepper_default';
+      if (!env.PEPPER_SECRET) {
+        return errorJson('השרת אינו מוגדר בצורה מאובטחת', 503);
+      }
       const familyId = env.DEFAULT_FAMILY_ID || 'yaniv_family';
 
       if (role === 'parent') {
@@ -171,11 +173,22 @@ export default {
           return errorJson('המשפחה טרם הוגדרה במערכת', 404);
         }
 
-        const valid = await verifyPin(pin, family.parent_pin_hash, family.parent_pin_salt, pepper);
-        await recordLoginAttempt(env.DB, ip, 'parent', 'parent', valid);
+        const verification = await verifyPinWithPepperMigration(
+          pin,
+          family.parent_pin_hash,
+          family.parent_pin_salt,
+          env
+        );
+        await recordLoginAttempt(env.DB, ip, 'parent', 'parent', verification.valid);
 
-        if (!valid) {
+        if (!verification.valid) {
           return errorJson('קוד הורה שגוי', 401);
+        }
+
+        if (verification.migrated && verification.hash && verification.salt) {
+          await env.DB.prepare(
+            `UPDATE families SET parent_pin_hash=?, parent_pin_salt=?, updated_at=? WHERE id=?`
+          ).bind(verification.hash, verification.salt, new Date().toISOString(), family.id).run();
         }
 
         const { token } = await createSession(env.DB, family.id, 'parent');
@@ -206,11 +219,22 @@ export default {
           return errorJson('הילד לא נמצא', 404);
         }
 
-        const valid = await verifyPin(pin, child.pin_hash, child.pin_salt, pepper);
-        await recordLoginAttempt(env.DB, ip, 'child', childId, valid);
+        const verification = await verifyPinWithPepperMigration(
+          pin,
+          child.pin_hash,
+          child.pin_salt,
+          env
+        );
+        await recordLoginAttempt(env.DB, ip, 'child', childId, verification.valid);
 
-        if (!valid) {
+        if (!verification.valid) {
           return errorJson('קוד סודי שגוי', 401);
+        }
+
+        if (verification.migrated && verification.hash && verification.salt) {
+          await env.DB.prepare(
+            `UPDATE children SET pin_hash=?, pin_salt=?, updated_at=? WHERE id=? AND family_id=?`
+          ).bind(verification.hash, verification.salt, new Date().toISOString(), child.id, child.family_id).run();
         }
 
         const { token } = await createSession(env.DB, child.family_id, 'child', child.id);
@@ -419,6 +443,40 @@ export default {
         return json({ success: true, message: 'בקשת זמן המסך נשלחה להורים!' });
       }
 
+      if (pathname === '/api/child/screen-session' && method === 'GET') {
+        if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
+        return json(await getScreenSessionState(env.DB, user.familyId, user.id));
+      }
+
+      if (pathname === '/api/child/screen-session/start' && method === 'POST') {
+        if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
+        const body = (await request.json().catch(() => ({}))) as any;
+        const result = await startScreenSession(env.DB, user.familyId, user.id, String(body.requestId || ''));
+        if (!result.success) return errorJson(result.error || 'לא ניתן להפעיל את הטיימר', 400);
+        return json({ success: true, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
+      }
+
+      if (pathname === '/api/child/screen-session/pause' && method === 'POST') {
+        if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
+        const result = await pauseScreenSession(env.DB, user.familyId, user.id);
+        if (!result.success) return errorJson(result.error || 'לא ניתן להשהות את הטיימר', 400);
+        return json({ success: true, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
+      }
+
+      if (pathname === '/api/child/screen-session/resume' && method === 'POST') {
+        if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
+        const result = await resumeScreenSession(env.DB, user.familyId, user.id);
+        if (!result.success) return errorJson(result.error || 'לא ניתן להמשיך את הטיימר', 400);
+        return json({ success: true, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
+      }
+
+      if (pathname === '/api/child/screen-session/stop' && method === 'POST') {
+        if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
+        const result = await stopScreenSession(env.DB, user.familyId, user.id);
+        if (!result.success) return errorJson(result.error || 'לא ניתן לעצור את הטיימר', 400);
+        return json({ success: true, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
+      }
+
       if (pathname === '/api/child/history' && method === 'GET') {
         const childId = user.role === 'child' ? user.id : url.searchParams.get('childId');
         if (!childId) return errorJson('חסר מזהה ילד', 400);
@@ -459,10 +517,9 @@ export default {
 
       // --- NOTIFICATIONS & PUSH (Accessible by both parent and child) ---
       if (pathname === '/api/push/vapid-public-key' && method === 'GET') {
-        return json({
-          publicKey: env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY,
-        });
-      }
+      if (!env.VAPID_PUBLIC_KEY) return errorJson('Push notifications are not configured', 503);
+      return json({ publicKey: env.VAPID_PUBLIC_KEY });
+    }
 
       if (pathname === '/api/push/subscribe' && method === 'POST') {
         const body = (await request.json().catch(() => ({}))) as any;
@@ -610,6 +667,38 @@ export default {
         return json({ pendingTasks, pendingRequests });
       }
 
+      if (pathname === '/api/parent/tasks/approve-all' && method === 'POST') {
+        const { results: pending } = await env.DB.prepare(
+          `SELECT id, child_id, title, task_kind FROM task_instances
+           WHERE family_id=? AND status='submitted' ORDER BY submitted_at ASC LIMIT 50`
+        ).bind(user.familyId).all<{ id: string; child_id: string; title: string; task_kind: 'mandatory' | 'bonus' }>();
+
+        let approvedCount = 0;
+        for (const item of pending || []) {
+          const result = await approveTask(env.DB, item.id, user.familyId);
+          if (!result.success) continue;
+          approvedCount++;
+
+          ctx.waitUntil(
+            sendNotification(env.DB, env, {
+              familyId: user.familyId,
+              recipientRole: 'child',
+              recipientChildId: item.child_id,
+              type: 'task_approved',
+              title: item.task_kind === 'mandatory' ? 'משימת חובה אושרה! ⭐' : 'המשימה אושרה! 🪙',
+              message:
+                item.task_kind === 'mandatory'
+                  ? `כל הכבוד! המשימה "${item.title}" אושרה וקיבלת ${result.xpAwarded || 0} XP.`
+                  : `כל הכבוד! המשימה "${item.title}" אושרה וקיבלת +${result.minutesAwarded || 0} דקות.`,
+              entityType: 'task_instance',
+              entityId: item.id,
+              skipDbInsert: true,
+            })
+          );
+        }
+        return json({ success: true, approvedCount, message: `אושרו ${approvedCount} משימות` });
+      }
+
       if (pathname.match(/^\/api\/parent\/tasks\/[^/]+\/approve$/) && method === 'POST') {
         const instanceId = pathname.split('/')[4];
         const body = (await request.json().catch(() => ({}))) as any;
@@ -624,15 +713,20 @@ export default {
         ctx.waitUntil(
           (async () => {
             try {
-              const task = await env.DB.prepare(`SELECT child_id, title FROM task_instances WHERE id = ?`).bind(instanceId).first<{ child_id: string; title: string }>();
+              const task = await env.DB.prepare(
+                `SELECT child_id, title, task_kind FROM task_instances WHERE id = ?`
+              ).bind(instanceId).first<{ child_id: string; title: string; task_kind: 'mandatory' | 'bonus' }>();
               if (task) {
                 await sendNotification(env.DB, env, {
                   familyId: user.familyId,
                   recipientRole: 'child',
                   recipientChildId: task.child_id,
                   type: 'task_approved',
-                  title: 'המשימה אושרה! 🪙',
-                  message: `כל הכבוד! המשימה "${task.title}" אושרה וקיבלת +${result.minutesAwarded} דקות!`,
+                  title: task.task_kind === 'mandatory' ? 'משימת חובה אושרה! ⭐' : 'המשימה אושרה! 🪙',
+                  message:
+                    task.task_kind === 'mandatory'
+                      ? `כל הכבוד! המשימה "${task.title}" אושרה וקיבלת ${result.xpAwarded || 0} XP.`
+                      : `כל הכבוד! המשימה "${task.title}" אושרה וקיבלת +${result.minutesAwarded || 0} דקות!`,
                   entityType: 'task_instance',
                   entityId: instanceId,
                   skipDbInsert: true,
@@ -646,7 +740,10 @@ export default {
 
         return json({
           success: true,
-          message: 'המשימה אושרה בהצלחה והדקות הועברו לילד',
+          message:
+            (result.minutesAwarded || 0) > 0
+              ? 'המשימה אושרה בהצלחה והדקות הועברו לילד'
+              : 'משימת החובה אושרה בהצלחה ונקודות ה-XP עודכנו',
           minutesAwarded: result.minutesAwarded,
           xpAwarded: result.xpAwarded,
         });
@@ -820,35 +917,67 @@ export default {
         const body = (await request.json().catch(() => ({}))) as any;
         const title = body.title?.trim();
         const description = body.description?.trim() || null;
-        const rewardMinutes = Number(body.rewardMinutes) || 15;
-        const scheduleType = body.scheduleType || 'daily';
-        const daysOfWeek = body.daysOfWeek ? JSON.stringify(body.daysOfWeek) : '[0,1,2,3,4,5,6]';
-        const requiresPhoto = body.requiresPhoto ? 1 : 0;
+        const rewardMinutes = Math.max(1, Number(body.rewardMinutes) || 15);
+        const scheduleType = String(body.scheduleType || 'daily');
+        const taskKind = body.taskKind === 'mandatory' ? 'mandatory' : 'bonus';
         const assignedChildIds = Array.isArray(body.assignedChildIds) ? body.assignedChildIds : [];
+        const requiresPhoto = body.requiresPhoto ? 1 : 0;
+        const oneTimeDate = body.oneTimeDate || null;
+        const timeWindowStart = body.timeWindowStart || null;
+        const timeWindowEnd = body.timeWindowEnd || null;
+        const rawDays = Array.isArray(body.daysOfWeek) ? body.daysOfWeek.map(Number) : [];
+        const validDays = [...new Set(rawDays.filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
 
-        if (!title) {
-          return errorJson('כותרת משימה נדרשת', 400);
+        if (!title) return errorJson('כותרת משימה נדרשת', 400);
+        if (!['one_time','daily','weekly','custom','repeatable'].includes(scheduleType)) {
+          return errorJson('תדירות משימה אינה תקינה', 400);
         }
+        if ((scheduleType === 'weekly' || scheduleType === 'custom') && validDays.length === 0) {
+          return errorJson('יש לבחור לפחות יום אחד בשבוע', 400);
+        }
+        if (scheduleType === 'one_time' && !/^\d{4}-\d{2}-\d{2}$/.test(String(oneTimeDate || ''))) {
+          return errorJson('יש לבחור תאריך למשימה חד-פעמית', 400);
+        }
+        if (timeWindowStart && !/^\d{2}:\d{2}$/.test(timeWindowStart)) return errorJson('שעת התחלה אינה תקינה', 400);
+        if (timeWindowEnd && !/^\d{2}:\d{2}$/.test(timeWindowEnd)) return errorJson('שעת סיום אינה תקינה', 400);
+        if (timeWindowStart && timeWindowEnd && timeWindowEnd <= timeWindowStart) {
+          return errorJson('שעת הסיום חייבת להיות אחרי שעת ההתחלה', 400);
+        }
+
+        const daysOfWeek =
+          scheduleType === 'weekly' || scheduleType === 'custom'
+            ? JSON.stringify(validDays)
+            : scheduleType === 'daily' || scheduleType === 'repeatable'
+            ? '[0,1,2,3,4,5,6]'
+            : null;
 
         const templateId = generateId();
         const now = new Date().toISOString();
 
         await env.DB.prepare(
           `INSERT INTO task_templates (
-            id, family_id, title, description, reward_minutes, schedule_type, days_of_week, 
-            requires_photo, is_active, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
-        )
-          .bind(templateId, user.familyId, title, description, rewardMinutes, scheduleType, daysOfWeek, requiresPhoto, now, now)
-          .run();
+            id, family_id, title, description, reward_minutes, schedule_type, days_of_week,
+            time_window_start, time_window_end, requires_photo, task_kind, one_time_date,
+            is_active, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+        ).bind(
+          templateId, user.familyId, title, description, rewardMinutes, scheduleType, daysOfWeek,
+          timeWindowStart, timeWindowEnd, requiresPhoto, taskKind, oneTimeDate, now, now
+        ).run();
 
-        for (const cId of assignedChildIds) {
-          await env.DB.prepare(`INSERT INTO task_template_children (template_id, child_id) VALUES (?, ?)`).bind(templateId, cId).run();
+        let targets = assignedChildIds;
+        if (targets.length === 0) {
+          const { results } = await env.DB.prepare(`SELECT id FROM children WHERE family_id=?`).bind(user.familyId).all<{ id: string }>();
+          targets = (results || []).map((r) => r.id);
+        }
+        for (const cId of targets) {
+          await env.DB.prepare(
+            `INSERT OR IGNORE INTO task_template_children (template_id, child_id)
+             SELECT ?, id FROM children WHERE id=? AND family_id=?`
+          ).bind(templateId, cId, user.familyId).run();
         }
 
-        // Generate instances for today
         await ensureDailyTaskInstances(env.DB, user.familyId);
-
         return json({ success: true, message: 'תבנית המשימה נוצרה בהצלחה', templateId });
       }
 
@@ -856,35 +985,89 @@ export default {
         const templateId = pathname.split('/')[5];
         const body = (await request.json().catch(() => ({}))) as any;
         const title = body.title?.trim();
-        const description = body.description !== undefined ? body.description?.trim() : null;
-        const rewardMinutes = Number(body.rewardMinutes);
-        const scheduleType = body.scheduleType || null;
-        const isActive = body.isActive !== undefined ? (body.isActive ? 1 : 0) : 1;
+        const description = body.description !== undefined ? body.description?.trim() || null : undefined;
+        const rewardMinutes = body.rewardMinutes !== undefined ? Math.max(1, Number(body.rewardMinutes) || 1) : undefined;
+        const scheduleType = body.scheduleType ? String(body.scheduleType) : undefined;
+        const taskKind = body.taskKind ? (body.taskKind === 'mandatory' ? 'mandatory' : 'bonus') : undefined;
         const assignedChildIds = Array.isArray(body.assignedChildIds) ? body.assignedChildIds : null;
-        const now = new Date().toISOString();
+        const oneTimeDate = body.oneTimeDate !== undefined ? body.oneTimeDate || null : undefined;
+        const timeWindowStart = body.timeWindowStart !== undefined ? body.timeWindowStart || null : undefined;
+        const timeWindowEnd = body.timeWindowEnd !== undefined ? body.timeWindowEnd || null : undefined;
+        const rawDays = Array.isArray(body.daysOfWeek) ? body.daysOfWeek.map(Number) : null;
+        const validDays = rawDays ? [...new Set(rawDays.filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6))].sort() : null;
 
+        const current = await env.DB.prepare(`SELECT * FROM task_templates WHERE id=? AND family_id=?`)
+          .bind(templateId, user.familyId).first<any>();
+        if (!current) return errorJson('תבנית המשימה לא נמצאה', 404);
+
+        const nextSchedule = scheduleType || current.schedule_type;
+        if (!['one_time','daily','weekly','custom','repeatable'].includes(nextSchedule)) return errorJson('תדירות משימה אינה תקינה', 400);
+        const switchingToSelectedDays =
+          scheduleType &&
+          scheduleType !== current.schedule_type &&
+          (nextSchedule === 'weekly' || nextSchedule === 'custom');
+        if (
+          (nextSchedule === 'weekly' || nextSchedule === 'custom') &&
+          ((!validDays || validDays.length === 0) &&
+            (switchingToSelectedDays || !current.days_of_week))
+        ) {
+          return errorJson('יש לבחור לפחות יום אחד בשבוע', 400);
+        }
+        const nextDate = oneTimeDate !== undefined ? oneTimeDate : current.one_time_date;
+        if (nextSchedule === 'one_time' && !/^\d{4}-\d{2}-\d{2}$/.test(String(nextDate || ''))) {
+          return errorJson('יש לבחור תאריך למשימה חד-פעמית', 400);
+        }
+        const nextStart = timeWindowStart !== undefined ? timeWindowStart : current.time_window_start;
+        const nextEnd = timeWindowEnd !== undefined ? timeWindowEnd : current.time_window_end;
+        if (nextStart && nextEnd && nextEnd <= nextStart) return errorJson('שעת הסיום חייבת להיות אחרי שעת ההתחלה', 400);
+
+        const daysOfWeek =
+          validDays !== null
+            ? JSON.stringify(validDays)
+            : (nextSchedule === 'daily' || nextSchedule === 'repeatable')
+            ? '[0,1,2,3,4,5,6]'
+            : current.days_of_week;
+
+        const now = new Date().toISOString();
         await env.DB.prepare(
-          `UPDATE task_templates 
-           SET title = COALESCE(?, title),
-               description = COALESCE(?, description),
-               reward_minutes = COALESCE(?, reward_minutes),
-               schedule_type = COALESCE(?, schedule_type),
-               is_active = ?,
-               updated_at = ?
-           WHERE id = ? AND family_id = ?`
-        )
-          .bind(title, description, isNaN(rewardMinutes) ? null : rewardMinutes, scheduleType, isActive, now, templateId, user.familyId)
-          .run();
+          `UPDATE task_templates SET
+             title=COALESCE(?,title),
+             description=?,
+             reward_minutes=COALESCE(?,reward_minutes),
+             schedule_type=?,
+             days_of_week=?,
+             time_window_start=?,
+             time_window_end=?,
+             task_kind=?,
+             one_time_date=?,
+             updated_at=?
+           WHERE id=? AND family_id=?`
+        ).bind(
+          title || null,
+          description !== undefined ? description : current.description,
+          rewardMinutes ?? null,
+          nextSchedule,
+          daysOfWeek,
+          nextStart || null,
+          nextEnd || null,
+          taskKind || current.task_kind || 'bonus',
+          nextDate || null,
+          now,
+          templateId,
+          user.familyId
+        ).run();
 
         if (assignedChildIds) {
-          await env.DB.prepare(`DELETE FROM task_template_children WHERE template_id = ?`).bind(templateId).run();
+          await env.DB.prepare(`DELETE FROM task_template_children WHERE template_id=?`).bind(templateId).run();
           for (const cId of assignedChildIds) {
-            await env.DB.prepare(`INSERT INTO task_template_children (template_id, child_id) VALUES (?, ?)`).bind(templateId, cId).run();
+            await env.DB.prepare(
+              `INSERT OR IGNORE INTO task_template_children (template_id, child_id)
+               SELECT ?, id FROM children WHERE id=? AND family_id=?`
+            ).bind(templateId, cId, user.familyId).run();
           }
         }
 
         await ensureDailyTaskInstances(env.DB, user.familyId);
-
         return json({ success: true, message: 'תבנית המשימה עודכנה בהצלחה' });
       }
 
@@ -1033,13 +1216,16 @@ export default {
       if (pathname === '/api/parent/children' && method === 'POST') {
         const body = (await request.json().catch(() => ({}))) as any;
         const name = body.name?.trim();
-        const pin = body.pin || '1234';
+        const pin = String(body.pin || '');
         const color = body.color || '#4facfe';
         const avatar = body.avatar || 'wand';
 
         if (!name) return errorJson('שם הילד נדרש', 400);
+        if (pin.length < 4) return errorJson('קוד הילד חייב להכיל לפחות 4 ספרות', 400);
 
-        const pepper = env.PEPPER_SECRET || 'timeplus_pepper_default';
+        let pepper: string;
+        try { pepper = requireActivePepper(env); }
+        catch { return errorJson('השרת אינו מוגדר בצורה מאובטחת', 503); }
         const childId = generateId();
         const salt = generateSalt(16);
         const pinHash = await hashPin(pin, salt, pepper);
@@ -1075,11 +1261,14 @@ export default {
         const name = body.name?.trim();
         const color = body.color;
         const avatar = body.avatar;
-        const pin = body.pin;
+        const pin = body.pin !== undefined && body.pin !== null ? String(body.pin) : '';
         const now = new Date().toISOString();
 
-        if (pin && pin.length >= 4) {
-          const pepper = env.PEPPER_SECRET || 'timeplus_pepper_default';
+        if (pin) {
+          if (pin.length < 4) return errorJson('קוד הילד חייב להכיל לפחות 4 ספרות', 400);
+          let pepper: string;
+          try { pepper = requireActivePepper(env); }
+          catch { return errorJson('השרת אינו מוגדר בצורה מאובטחת', 503); }
           const salt = generateSalt(16);
           const pinHash = await hashPin(pin, salt, pepper);
           await env.DB.prepare(`UPDATE children SET pin_hash = ?, pin_salt = ? WHERE id = ? AND family_id = ?`)

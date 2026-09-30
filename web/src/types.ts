@@ -48,6 +48,7 @@ export interface TaskItem {
   status: 'open' | 'submitted' | 'approved' | 'rejected' | 'expired' | 'cancelled';
   due_date: string;
   schedule_type?: 'one_time' | 'daily' | 'weekly' | 'custom' | 'repeatable';
+  task_kind?: 'mandatory' | 'bonus';
   submitted_at: string | null;
   reviewed_at: string | null;
   submission_note?: string;
@@ -115,4 +116,8 @@ export interface TaskTemplateItem {
   requires_photo: number;
   is_active: number;
   assigned_child_ids: string[];
+  task_kind?: 'mandatory' | 'bonus';
+  one_time_date?: string | null;
+  time_window_start?: string | null;
+  time_window_end?: string | null;
 }

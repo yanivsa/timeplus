@@ -61,7 +61,7 @@ export const SetupScreen: React.FC = () => {
         setError('נא למלא שמות לכל הילדים');
         return;
       }
-      if (c.pin && c.pin.length < 4) {
+      if (!c.pin || c.pin.length < 4) {
         setError(`קוד הכניסה של ${c.name} חייב להכיל לפחות 4 ספרות`);
         return;
       }
@@ -77,7 +77,7 @@ export const SetupScreen: React.FC = () => {
           setupSecret: setupSecret || undefined,
           children: children.map((c) => ({
             name: c.name.trim(),
-            pin: c.pin || '1234',
+            pin: c.pin,
             color: c.color,
             avatar: c.avatar,
           })),
@@ -209,8 +209,9 @@ export const SetupScreen: React.FC = () => {
                     inputMode="numeric"
                     value={child.pin}
                     onChange={(e) => updateChild(index, 'pin', e.target.value)}
-                    placeholder="קוד PIN (4 ספרות)"
-                    maxLength={6}
+                    placeholder="קוד PIN (4+ ספרות)"
+                    maxLength={8}
+                    required
                     className="w-full rounded-xl bg-night-900 border border-purple-500/30 px-3 py-2 text-center text-sm font-mono tracking-wider text-purple-100 focus:outline-none focus:border-gold-400"
                   />
                 </div>

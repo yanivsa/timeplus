@@ -6,6 +6,7 @@ export interface Env {
   APP_NAME: string;
   TIMEZONE: string;
   PEPPER_SECRET?: string;
+  LEGACY_PEPPER_SECRET?: string;
   INIT_SECRET?: string;
   PHOTOS?: R2Bucket;
   WEB_VERSION?: string;
@@ -89,6 +90,8 @@ export interface TaskTemplate {
   created_at: string;
   updated_at: string;
   assigned_child_ids?: string[];
+  task_kind?: 'mandatory' | 'bonus';
+  one_time_date?: string | null;
 }
 
 export type TaskStatus = 'open' | 'submitted' | 'approved' | 'rejected' | 'expired' | 'cancelled';
@@ -102,6 +105,7 @@ export interface TaskInstance {
   description: string | null;
   reward_minutes: number;
   requires_photo: number;
+  task_kind: 'mandatory' | 'bonus';
   status: TaskStatus;
   due_date: string;
   submitted_at: string | null;

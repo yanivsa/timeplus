@@ -42,6 +42,15 @@ import { NotificationBell } from '../components/NotificationBell';
 
 export const ParentDashboard: React.FC = () => {
   const { user, logout, familyName } = useAuth();
+  const weekDays = [
+    { id: 0, label: 'א׳' },
+    { id: 1, label: 'ב׳' },
+    { id: 2, label: 'ג׳' },
+    { id: 3, label: 'ד׳' },
+    { id: 4, label: 'ה׳' },
+    { id: 5, label: 'ו׳' },
+    { id: 6, label: 'ש׳' },
+  ];
   const [activeTab, setActiveTab] = useState<'overview' | 'approvals' | 'tasks' | 'usage' | 'history' | 'stats' | 'settings'>('overview');
   const [loading, setLoading] = useState(true);
 
@@ -74,7 +83,12 @@ export const ParentDashboard: React.FC = () => {
   const [templateTitle, setTemplateTitle] = useState('');
   const [templateDescription, setTemplateDescription] = useState('');
   const [templateReward, setTemplateReward] = useState<number>(15);
-  const [templateSchedule, setTemplateSchedule] = useState<'daily' | 'weekly' | 'custom' | 'repeatable'>('daily');
+  const [templateSchedule, setTemplateSchedule] = useState<'daily' | 'weekly' | 'custom' | 'repeatable' | 'one_time'>('daily');
+  const [templateKind, setTemplateKind] = useState<'bonus' | 'mandatory'>('bonus');
+  const [templateDays, setTemplateDays] = useState<number[]>([0, 1, 2, 3, 4]);
+  const [templateOneTimeDate, setTemplateOneTimeDate] = useState('');
+  const [templateTimeStart, setTemplateTimeStart] = useState('');
+  const [templateTimeEnd, setTemplateTimeEnd] = useState('');
   const [templateChildIds, setTemplateChildIds] = useState<string[]>([]);
 
   // Edit template state
@@ -82,7 +96,12 @@ export const ParentDashboard: React.FC = () => {
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editReward, setEditReward] = useState<number>(15);
-  const [editSchedule, setEditSchedule] = useState<'daily' | 'weekly' | 'custom' | 'repeatable'>('daily');
+  const [editSchedule, setEditSchedule] = useState<'daily' | 'weekly' | 'custom' | 'repeatable' | 'one_time'>('daily');
+  const [editKind, setEditKind] = useState<'bonus' | 'mandatory'>('bonus');
+  const [editDays, setEditDays] = useState<number[]>([0, 1, 2, 3, 4]);
+  const [editOneTimeDate, setEditOneTimeDate] = useState('');
+  const [editTimeStart, setEditTimeStart] = useState('');
+  const [editTimeEnd, setEditTimeEnd] = useState('');
   const [editChildIds, setEditChildIds] = useState<string[]>([]);
 
   const [addChildModal, setAddChildModal] = useState(false);
@@ -290,6 +309,19 @@ export const ParentDashboard: React.FC = () => {
     }
   };
 
+  const parseTemplateDays = (value: string | null | undefined): number[] => {
+    try {
+      const parsed = value ? JSON.parse(value) : [];
+      return Array.isArray(parsed) ? parsed.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const toggleDay = (day: number, current: number[], setter: React.Dispatch<React.SetStateAction<number[]>>) => {
+    setter(current.includes(day) ? current.filter((d) => d !== day) : [...current, day].sort());
+  };
+
   // Create Template
   const handleCreateTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -303,6 +335,11 @@ export const ParentDashboard: React.FC = () => {
           description: templateDescription.trim() || null,
           rewardMinutes: templateReward,
           scheduleType: templateSchedule,
+          taskKind: templateKind,
+          daysOfWeek: templateDays,
+          oneTimeDate: templateOneTimeDate || null,
+          timeWindowStart: templateTimeStart || null,
+          timeWindowEnd: templateTimeEnd || null,
           assignedChildIds: templateChildIds.length > 0 ? templateChildIds : children.map((c) => c.id),
         }),
       });
@@ -310,6 +347,14 @@ export const ParentDashboard: React.FC = () => {
       setNewTemplateModal(false);
       setTemplateTitle('');
       setTemplateDescription('');
+      setTemplateReward(15);
+      setTemplateSchedule('daily');
+      setTemplateKind('bonus');
+      setTemplateDays([0, 1, 2, 3, 4]);
+      setTemplateOneTimeDate('');
+      setTemplateTimeStart('');
+      setTemplateTimeEnd('');
+      setTemplateChildIds([]);
       setStatusMessage({ text: 'תבנית המשימה נוצרה בהצלחה!', type: 'success' });
       await loadTemplates();
       await loadDashboard();
@@ -340,6 +385,12 @@ export const ParentDashboard: React.FC = () => {
     setEditDescription(tpl.description || '');
     setEditReward(tpl.reward_minutes);
     setEditSchedule((tpl.schedule_type as any) || 'daily');
+    setEditKind(tpl.task_kind === 'mandatory' ? 'mandatory' : 'bonus');
+    const parsedDays = parseTemplateDays(tpl.days_of_week);
+    setEditDays(parsedDays.length > 0 ? parsedDays : [0, 1, 2, 3, 4]);
+    setEditOneTimeDate(tpl.one_time_date || '');
+    setEditTimeStart(tpl.time_window_start || '');
+    setEditTimeEnd(tpl.time_window_end || '');
     setEditChildIds(tpl.assigned_child_ids && tpl.assigned_child_ids.length > 0 ? tpl.assigned_child_ids : children.map((c) => c.id));
   };
 
@@ -357,6 +408,11 @@ export const ParentDashboard: React.FC = () => {
           description: editDescription.trim() || null,
           rewardMinutes: editReward,
           scheduleType: editSchedule,
+          taskKind: editKind,
+          daysOfWeek: editDays,
+          oneTimeDate: editOneTimeDate || null,
+          timeWindowStart: editTimeStart || null,
+          timeWindowEnd: editTimeEnd || null,
           assignedChildIds: editChildIds.length > 0 ? editChildIds : children.map((c) => c.id),
         }),
       });
@@ -371,17 +427,64 @@ export const ParentDashboard: React.FC = () => {
     }
   };
 
+  const handleApproveAll = async () => {
+    if (pendingTasks.length === 0) return;
+    audio.playTap();
+    try {
+      const res = await apiRequest('/api/parent/tasks/approve-all', { method: 'POST' });
+      audio.playApproval();
+      setStatusMessage({ text: res.message || 'כל המשימות אושרו', type: 'success' });
+      await loadDashboard();
+    } catch (err: any) {
+      audio.playReject();
+      setStatusMessage({ text: err.message || 'אישור מרוכז נכשל', type: 'error' });
+    }
+  };
+
+  const handleDuplicateTemplate = async (tpl: TaskTemplateItem) => {
+    audio.playTap();
+    try {
+      await apiRequest('/api/parent/tasks/templates', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: `${tpl.title} (עותק)`,
+          description: tpl.description,
+          rewardMinutes: tpl.reward_minutes,
+          scheduleType: tpl.schedule_type,
+          taskKind: tpl.task_kind || 'bonus',
+          daysOfWeek: parseTemplateDays(tpl.days_of_week),
+          oneTimeDate: tpl.one_time_date || null,
+          timeWindowStart: tpl.time_window_start || null,
+          timeWindowEnd: tpl.time_window_end || null,
+          assignedChildIds: tpl.assigned_child_ids || [],
+        }),
+      });
+      audio.playApproval();
+      setStatusMessage({ text: 'נוצר עותק של המשימה', type: 'success' });
+      await loadTemplates();
+      await loadDashboard();
+    } catch (err: any) {
+      audio.playReject();
+      setStatusMessage({ text: err.message || 'שכפול המשימה נכשל', type: 'error' });
+    }
+  };
+
   // Add child
   const handleAddChild = async (e: React.FormEvent) => {
     e.preventDefault();
     audio.playTap();
+
+    if (newChildPin.length < 4) {
+      setStatusMessage({ text: 'קוד הילד חייב להכיל לפחות 4 ספרות', type: 'error' });
+      return;
+    }
 
     try {
       await apiRequest('/api/parent/children', {
         method: 'POST',
         body: JSON.stringify({
           name: newChildName.trim(),
-          pin: newChildPin || '1234',
+          pin: newChildPin,
           color: newChildColor,
         }),
       });
@@ -716,10 +819,20 @@ export const ParentDashboard: React.FC = () => {
         <div className="space-y-6">
           {/* Section A: Task Submissions */}
           <div className="space-y-3">
-            <h2 className="text-base font-bold text-white flex items-center gap-2">
-              <CheckCircle className="h-5 w-5 text-gold-400" />
-              <span>משימות שממתינות לאישור ({pendingTasks.length})</span>
-            </h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <CheckCircle className="h-5 w-5 text-gold-400" />
+                <span>משימות שממתינות לאישור ({pendingTasks.length})</span>
+              </h2>
+              {pendingTasks.length > 1 && (
+                <button
+                  onClick={handleApproveAll}
+                  className="py-1.5 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold transition"
+                >
+                  אשר את כולן
+                </button>
+              )}
+            </div>
 
             {pendingTasks.length === 0 ? (
               <div className="p-8 rounded-2xl bg-night-900/50 border border-purple-500/20 text-center text-xs text-purple-400/60">
@@ -758,9 +871,11 @@ export const ParentDashboard: React.FC = () => {
 
                       <div className="text-left font-mono shrink-0">
                         <span className="text-lg font-black text-gold-400 font-cinzel">
-                          +{t.reward_minutes}
+                          {t.task_kind === 'mandatory' ? 'XP' : `+${t.reward_minutes}`}
                         </span>
-                        <span className="block text-[10px] text-purple-400">דקות</span>
+                        <span className="block text-[10px] text-purple-400">
+                          {t.task_kind === 'mandatory' ? 'משימת חובה' : 'דקות'}
+                        </span>
                       </div>
                     </div>
 
@@ -772,21 +887,23 @@ export const ParentDashboard: React.FC = () => {
                         דחה
                       </button>
 
-                      <button
-                        onClick={() => {
-                          setCustomApprovalTask(t);
-                          setCustomApprovalMinutes(t.reward_minutes);
-                        }}
-                        className="py-1.5 px-3 rounded-xl bg-night-950 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition"
-                      >
-                        שנה דקות ואשר
-                      </button>
+                      {t.task_kind !== 'mandatory' && (
+                        <button
+                          onClick={() => {
+                            setCustomApprovalTask(t);
+                            setCustomApprovalMinutes(t.reward_minutes);
+                          }}
+                          className="py-1.5 px-3 rounded-xl bg-night-950 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition"
+                        >
+                          שנה דקות ואשר
+                        </button>
+                      )}
 
                       <button
                         onClick={() => handleApproveTask(t.id)}
                         className="py-1.5 px-5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-md transition"
                       >
-                        אשר (+{t.reward_minutes} דק׳)
+                        {t.task_kind === 'mandatory' ? 'אשר (XP)' : `אשר (+${t.reward_minutes} דק׳)`}
                       </button>
                     </div>
                   </div>
@@ -910,7 +1027,7 @@ export const ParentDashboard: React.FC = () => {
                   )}
                   <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] text-purple-400">
                     <span className="font-semibold text-gold-400 font-cinzel">
-                      +{tpl.reward_minutes} דקות
+                      {tpl.task_kind === 'mandatory' ? `חובה · XP (ערך ${tpl.reward_minutes})` : `+${tpl.reward_minutes} דקות`}
                     </span>
                     <span>•</span>
                     <span>
@@ -935,6 +1052,13 @@ export const ParentDashboard: React.FC = () => {
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => handleDuplicateTemplate(tpl)}
+                    className="p-2 rounded-xl text-cyan-300 hover:text-white hover:bg-cyan-950/50 border border-cyan-500/20 transition"
+                    title="שכפל משימה"
+                  >
+                    <PlusCircle className="h-4 w-4" />
+                  </button>
                   <button
                     onClick={() => openEditTemplate(tpl)}
                     className="p-2 rounded-xl text-purple-300 hover:text-white hover:bg-purple-900/50 border border-purple-500/20 hover:border-purple-400/50 transition"
@@ -1193,7 +1317,7 @@ export const ParentDashboard: React.FC = () => {
       {/* --- MODAL: MANUAL USAGE --- */}
       {usageModalChild && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-sm rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
+          <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-base text-gold-300 font-cinzel">
                 רישום ניצול מסך · {usageModalChild.name}
@@ -1300,7 +1424,7 @@ export const ParentDashboard: React.FC = () => {
       {/* --- MODAL: NEW TEMPLATE --- */}
       {newTemplateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-sm rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
+          <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-base text-gold-300 font-cinzel">תבנית משימה חדשה</h3>
               <button onClick={() => setNewTemplateModal(false)}>
@@ -1334,7 +1458,7 @@ export const ParentDashboard: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-purple-200 mb-1">תגמול (דקות)</label>
+                  <label className="block text-xs text-purple-200 mb-1">{templateKind === 'mandatory' ? 'ערך משימה (ל-XP)' : 'תגמול (דקות)'}</label>
                   <input
                     type="number"
                     min="1"
@@ -1354,8 +1478,58 @@ export const ParentDashboard: React.FC = () => {
                     <option value="daily">יומי (פעם ביום)</option>
                     <option value="repeatable">ללא הגבלה (אימון חוזר / כל פעם מחדש)</option>
                     <option value="weekly">שבועי</option>
+                    <option value="custom">ימים מותאמים</option>
                     <option value="one_time">חד-פעמי</option>
                   </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-purple-200 mb-1.5">סוג משימה</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setTemplateKind('bonus')}
+                    className={`py-2 rounded-xl text-xs font-bold border ${templateKind === 'bonus' ? 'bg-gold-500 text-night-950 border-gold-400' : 'bg-night-950 text-purple-300 border-purple-500/20'}`}>
+                    בונוס · דקות + XP
+                  </button>
+                  <button type="button" onClick={() => setTemplateKind('mandatory')}
+                    className={`py-2 rounded-xl text-xs font-bold border ${templateKind === 'mandatory' ? 'bg-purple-600 text-white border-purple-400' : 'bg-night-950 text-purple-300 border-purple-500/20'}`}>
+                    חובה · XP בלבד
+                  </button>
+                </div>
+              </div>
+
+              {(templateSchedule === 'weekly' || templateSchedule === 'custom') && (
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1.5">ימים</label>
+                  <div className="grid grid-cols-7 gap-1">
+                    {weekDays.map((day) => (
+                      <button key={day.id} type="button" onClick={() => toggleDay(day.id, templateDays, setTemplateDays)}
+                        className={`h-9 rounded-lg text-xs font-bold border ${templateDays.includes(day.id) ? 'bg-purple-600 border-purple-400 text-white' : 'bg-night-950 border-purple-500/20 text-purple-300'}`}>
+                        {day.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {templateSchedule === 'one_time' && (
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1">תאריך</label>
+                  <input type="date" required value={templateOneTimeDate} onChange={(e) => setTemplateOneTimeDate(e.target.value)}
+                    className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2.5 text-sm text-white" />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1">משעה (אופציונלי)</label>
+                  <input type="time" value={templateTimeStart} onChange={(e) => setTemplateTimeStart(e.target.value)}
+                    className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2 text-sm text-white" />
+                </div>
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1">עד שעה (אופציונלי)</label>
+                  <input type="time" value={templateTimeEnd} onChange={(e) => setTemplateTimeEnd(e.target.value)}
+                    className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2 text-sm text-white" />
                 </div>
               </div>
 
@@ -1408,7 +1582,7 @@ export const ParentDashboard: React.FC = () => {
       {/* --- MODAL: EDIT TEMPLATE --- */}
       {editingTemplate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-sm rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
+          <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-base text-gold-300 font-cinzel">עריכת תבנית משימה</h3>
               <button onClick={() => setEditingTemplate(null)}>
@@ -1442,7 +1616,7 @@ export const ParentDashboard: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs text-purple-200 mb-1">תגמול (דקות)</label>
+                  <label className="block text-xs text-purple-200 mb-1">{editKind === 'mandatory' ? 'ערך משימה (ל-XP)' : 'תגמול (דקות)'}</label>
                   <input
                     type="number"
                     min="1"
@@ -1462,8 +1636,58 @@ export const ParentDashboard: React.FC = () => {
                     <option value="daily">יומי (פעם ביום)</option>
                     <option value="repeatable">ללא הגבלה (אימון חוזר / כל פעם מחדש)</option>
                     <option value="weekly">שבועי</option>
+                    <option value="custom">ימים מותאמים</option>
                     <option value="one_time">חד-פעמי</option>
                   </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-purple-200 mb-1.5">סוג משימה</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => setEditKind('bonus')}
+                    className={`py-2 rounded-xl text-xs font-bold border ${editKind === 'bonus' ? 'bg-gold-500 text-night-950 border-gold-400' : 'bg-night-950 text-purple-300 border-purple-500/20'}`}>
+                    בונוס · דקות + XP
+                  </button>
+                  <button type="button" onClick={() => setEditKind('mandatory')}
+                    className={`py-2 rounded-xl text-xs font-bold border ${editKind === 'mandatory' ? 'bg-purple-600 text-white border-purple-400' : 'bg-night-950 text-purple-300 border-purple-500/20'}`}>
+                    חובה · XP בלבד
+                  </button>
+                </div>
+              </div>
+
+              {(editSchedule === 'weekly' || editSchedule === 'custom') && (
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1.5">ימים</label>
+                  <div className="grid grid-cols-7 gap-1">
+                    {weekDays.map((day) => (
+                      <button key={day.id} type="button" onClick={() => toggleDay(day.id, editDays, setEditDays)}
+                        className={`h-9 rounded-lg text-xs font-bold border ${editDays.includes(day.id) ? 'bg-purple-600 border-purple-400 text-white' : 'bg-night-950 border-purple-500/20 text-purple-300'}`}>
+                        {day.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {editSchedule === 'one_time' && (
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1">תאריך</label>
+                  <input type="date" required value={editOneTimeDate} onChange={(e) => setEditOneTimeDate(e.target.value)}
+                    className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2.5 text-sm text-white" />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1">משעה (אופציונלי)</label>
+                  <input type="time" value={editTimeStart} onChange={(e) => setEditTimeStart(e.target.value)}
+                    className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2 text-sm text-white" />
+                </div>
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1">עד שעה (אופציונלי)</label>
+                  <input type="time" value={editTimeEnd} onChange={(e) => setEditTimeEnd(e.target.value)}
+                    className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2 text-sm text-white" />
                 </div>
               </div>
 
@@ -1523,7 +1747,7 @@ export const ParentDashboard: React.FC = () => {
       {/* --- MODAL: ADD CHILD --- */}
       {addChildModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-sm rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
+          <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-base text-gold-300 font-cinzel">הוספת ילד למשפחה</h3>
               <button onClick={() => setAddChildModal(false)}>

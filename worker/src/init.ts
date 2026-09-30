@@ -1,5 +1,6 @@
 import { Env, Child } from './types';
 import { generateId, generateSalt, hashPin } from './crypto';
+import { requireActivePepper } from './pin-security';
 import { createSession } from './auth';
 import { ensureDailyTaskInstances } from './tasks';
 import { getIsraelDateString } from './timezone';
@@ -61,7 +62,12 @@ export async function initializeFamily(
     return { success: false, error: 'יש להגדיר לפחות ילד אחד' };
   }
 
-  const pepper = env.PEPPER_SECRET || 'timeplus_pepper_default';
+  let pepper: string;
+  try {
+    pepper = requireActivePepper(env);
+  } catch {
+    return { success: false, error: 'השרת אינו מוגדר בצורה מאובטחת (PEPPER_SECRET חסר)' };
+  }
   const familyId = env.DEFAULT_FAMILY_ID || 'yaniv_family';
   const now = new Date().toISOString();
 
@@ -92,11 +98,14 @@ export async function initializeFamily(
   // 3. Insert Children
   const createdChildIds: string[] = [];
   for (const c of payload.children) {
+    if (!c.name?.trim()) return { success: false, error: 'שם ילד נדרש' };
+    if (!c.pin || c.pin.length < 4) return { success: false, error: `קוד הכניסה של ${c.name} חייב להכיל לפחות 4 ספרות` };
+
     const childId = generateId();
     createdChildIds.push(childId);
 
     const childSalt = generateSalt(16);
-    const childHash = await hashPin(c.pin || '1234', childSalt, pepper);
+    const childHash = await hashPin(c.pin, childSalt, pepper);
     const color = c.color || (createdChildIds.length % 2 === 1 ? '#4facfe' : '#10b981');
     const avatar = c.avatar || (createdChildIds.length % 2 === 1 ? 'wand' : 'potion');
 

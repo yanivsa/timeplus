@@ -2,10 +2,6 @@ import { Env, UserRole } from './types';
 import { generateId } from './crypto';
 import { buildPushPayload, PushMessage, PushSubscription, VapidKeys } from '@block65/webcrypto-web-push';
 
-export const DEFAULT_VAPID_PUBLIC_KEY = 'BNivRIlMV4wUthjv62Kg54bRf42DzXqGRO7_QMXg0Ydn3Q6s3QKWiX01DKQHkLM_xjE0GAjixl9f997yCA7F6dE';
-export const DEFAULT_VAPID_PRIVATE_KEY = '9gMhTo__JxlxiqISAZFSMN4z43cDGFavb9NEfEfT2Ds';
-export const DEFAULT_VAPID_SUBJECT = 'mailto:admin@timeplus.local';
-
 export interface SendNotificationParams {
   familyId: string;
   recipientRole: UserRole;
@@ -168,10 +164,15 @@ export async function sendNotification(
 
   // 3. Prepare VAPID Keys
   const vapidKeys: VapidKeys = {
-    subject: env.VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT,
-    publicKey: env.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY,
-    privateKey: env.VAPID_PRIVATE_KEY || DEFAULT_VAPID_PRIVATE_KEY,
+    subject: env.VAPID_SUBJECT || 'https://timeplus.yanivsa.workers.dev',
+    publicKey: env.VAPID_PUBLIC_KEY || '',
+    privateKey: env.VAPID_PRIVATE_KEY || '',
   };
+
+  if (!vapidKeys.publicKey || !vapidKeys.privateKey) {
+    console.warn('Push skipped: VAPID keys are not configured');
+    return;
+  }
 
   const pushMessage: PushMessage = {
     data: JSON.stringify({

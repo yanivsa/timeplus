@@ -1,6 +1,6 @@
 import { TaskTemplate, TaskInstance, ScheduleType, TaskStatus } from './types';
 import { generateId } from './crypto';
-import { getIsraelDateString, getIsraelDayOfWeek, getIsraelDayDiff } from './timezone';
+import { getIsraelDateString, getIsraelDayOfWeek, getIsraelDayDiff, getIsraelTimeString } from './timezone';
 import { calculateTaskXp, getRankDetails } from './gamification';
 
 export async function ensureDailyTaskInstances(
@@ -31,15 +31,13 @@ export async function ensureDailyTaskInstances(
       if (tpl.days_of_week) {
         try {
           const days = JSON.parse(tpl.days_of_week) as number[];
-          if (Array.isArray(days) && days.includes(dayOfWeek)) {
-            shouldGenerate = true;
-          }
+          shouldGenerate = Array.isArray(days) && days.some((day) => Number.isInteger(day) && day >= 0 && day <= 6) && days.includes(dayOfWeek);
         } catch {
-          shouldGenerate = true;
+          shouldGenerate = false;
         }
-      } else {
-        shouldGenerate = true;
       }
+    } else if (tpl.schedule_type === 'one_time') {
+      shouldGenerate = !!tpl.one_time_date && tpl.one_time_date === targetDateStr;
     }
 
     if (!shouldGenerate) continue;
@@ -67,8 +65,8 @@ export async function ensureDailyTaskInstances(
             .prepare(
               `INSERT INTO task_instances (
                 id, family_id, template_id, child_id, title, description, 
-                reward_minutes, requires_photo, status, due_date, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+                reward_minutes, requires_photo, task_kind, status, due_date, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
             )
             .bind(
               instanceId,
@@ -79,6 +77,7 @@ export async function ensureDailyTaskInstances(
               tpl.description,
               tpl.reward_minutes,
               tpl.requires_photo,
+              tpl.task_kind || 'bonus',
               targetDateStr
             )
             .run();
@@ -102,8 +101,8 @@ export async function ensureDailyTaskInstances(
           .prepare(
             `INSERT INTO task_instances (
               id, family_id, template_id, child_id, title, description, 
-              reward_minutes, requires_photo, status, due_date, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+              reward_minutes, requires_photo, task_kind, status, due_date, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
           )
           .bind(
             instanceId,
@@ -114,6 +113,7 @@ export async function ensureDailyTaskInstances(
             tpl.description,
             tpl.reward_minutes,
             tpl.requires_photo,
+            tpl.task_kind || 'bonus',
             targetDateStr
           )
           .run();
@@ -144,6 +144,19 @@ export async function submitTask(
 
   if (instance.status !== 'open' && instance.status !== 'rejected') {
     return { success: false, error: 'לא ניתן להגיש משימה שכבר הוגשה או אושרה' };
+  }
+
+  if (instance.template_id) {
+    const window = await db.prepare(
+      `SELECT time_window_start, time_window_end FROM task_templates WHERE id = ?`
+    ).bind(instance.template_id).first<{ time_window_start: string | null; time_window_end: string | null }>();
+    const nowLocal = getIsraelTimeString();
+    if (window?.time_window_start && nowLocal < window.time_window_start) {
+      return { success: false, error: `המשימה נפתחת בשעה ${window.time_window_start}` };
+    }
+    if (window?.time_window_end && nowLocal > window.time_window_end) {
+      return { success: false, error: `חלון הזמן למשימה הסתיים בשעה ${window.time_window_end}` };
+    }
   }
 
   const submissionId = generateId();
@@ -218,12 +231,12 @@ export async function submitTask(
   if (instance.template_id) {
     const tpl = await db
       .prepare(
-        `SELECT schedule_type, title, description, reward_minutes, requires_photo 
+        `SELECT schedule_type, title, description, reward_minutes, requires_photo, task_kind
          FROM task_templates 
          WHERE id = ? AND is_active = 1 AND archived_at IS NULL`
       )
       .bind(instance.template_id)
-      .first<{ schedule_type: string; title: string; description: string | null; reward_minutes: number; requires_photo: number }>();
+      .first<{ schedule_type: string; title: string; description: string | null; reward_minutes: number; requires_photo: number; task_kind: 'mandatory' | 'bonus' }>();
 
     if (tpl && tpl.schedule_type === 'repeatable') {
       const nextInstanceId = generateId();
@@ -231,8 +244,8 @@ export async function submitTask(
         .prepare(
           `INSERT INTO task_instances (
             id, family_id, template_id, child_id, title, description, 
-            reward_minutes, requires_photo, status, due_date, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
+            reward_minutes, requires_photo, task_kind, status, due_date, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
         )
         .bind(
           nextInstanceId,
@@ -243,6 +256,7 @@ export async function submitTask(
           tpl.description,
           tpl.reward_minutes,
           tpl.requires_photo,
+          tpl.task_kind || 'bonus',
           getIsraelDateString(),
           now,
           now
@@ -279,10 +293,13 @@ export async function approveTask(
   }
 
   const rewardMinutes =
-    typeof customRewardMinutes === 'number' && !isNaN(customRewardMinutes)
+    instance.task_kind === 'mandatory'
+      ? 0
+      : typeof customRewardMinutes === 'number' && !isNaN(customRewardMinutes)
       ? Math.max(0, customRewardMinutes)
       : instance.reward_minutes;
 
+  const storedRewardMinutes = instance.task_kind === 'mandatory' ? instance.reward_minutes : rewardMinutes;
   const now = new Date().toISOString();
   const todayIsrael = getIsraelDateString();
 
@@ -293,7 +310,7 @@ export async function approveTask(
        SET status = 'approved', reward_minutes = ?, reviewed_at = ?, reviewed_by = 'parent', updated_at = ? 
        WHERE id = ? AND status = 'submitted'`
     )
-    .bind(rewardMinutes, now, now, instanceId)
+    .bind(storedRewardMinutes, now, now, instanceId)
     .run();
 
   if (updateRes.meta.changes === 0) {
@@ -319,34 +336,36 @@ export async function approveTask(
   const previousBalance = child?.available_minutes || 0;
   const newBalance = previousBalance + rewardMinutes;
 
-  // 1. Update child balance
-  await db
-    .prepare(`UPDATE children SET available_minutes = ?, updated_at = ? WHERE id = ?`)
-    .bind(newBalance, now, instance.child_id)
-    .run();
+  // 1. Credit minutes only for bonus tasks. Mandatory tasks award XP only.
+  if (rewardMinutes > 0) {
+    await db
+      .prepare(`UPDATE children SET available_minutes = ?, updated_at = ? WHERE id = ?`)
+      .bind(newBalance, now, instance.child_id)
+      .run();
 
-  // 2. Insert immutable ledger transaction
-  const txId = generateId();
-  await db
-    .prepare(
-      `INSERT INTO minute_transactions (
-        id, family_id, child_id, type, amount, balance_after, reason, task_instance_id, created_by, created_at
-      ) VALUES (?, ?, ?, 'earn', ?, ?, ?, ?, 'parent', ?)`
-    )
-    .bind(
-      txId,
-      parentFamilyId,
-      instance.child_id,
-      rewardMinutes,
-      newBalance,
-      `אישור משימה: ${instance.title}`,
-      instanceId,
-      now
-    )
-    .run();
+    const txId = generateId();
+    await db
+      .prepare(
+        `INSERT INTO minute_transactions (
+          id, family_id, child_id, type, amount, balance_after, reason, task_instance_id, created_by, created_at
+        ) VALUES (?, ?, ?, 'earn', ?, ?, ?, ?, 'parent', ?)`
+      )
+      .bind(
+        txId,
+        parentFamilyId,
+        instance.child_id,
+        rewardMinutes,
+        newBalance,
+        `אישור משימה: ${instance.title}`,
+        instanceId,
+        now
+      )
+      .run();
+  }
 
-  // 3. Calculate and award XP & Gamification progress
-  const xpAwarded = calculateTaskXp(rewardMinutes, instance.requires_photo === 1);
+  // 2. Calculate and award XP & Gamification progress.
+  // task reward_minutes also acts as the effort weight for mandatory tasks.
+  const xpAwarded = calculateTaskXp(instance.reward_minutes, instance.requires_photo === 1);
 
   // Get or initialize child progress
   let progress = await db
@@ -425,7 +444,9 @@ export async function approveTask(
       instance.child_id,
       isLevelUp ? 'level_up' : 'task_approved',
       isLevelUp ? `עלית לרמה ${newRank.level}! ${newRank.rankTitle}` : `כל הכבוד! ${instance.title} אושר`,
-      `קיבלת ${rewardMinutes} דקות מסך ו-${xpAwarded} נקודות קסם!`,
+      rewardMinutes > 0
+        ? `קיבלת ${rewardMinutes} דקות מסך ו-${xpAwarded} נקודות קסם!`
+        : `קיבלת ${xpAwarded} נקודות קסם על משימת חובה!`,
       rewardMinutes,
       xpAwarded,
       oldRank.level,
@@ -447,8 +468,10 @@ export async function approveTask(
       generateId(),
       parentFamilyId,
       instance.child_id,
-      `משימה אושרה! +${rewardMinutes} דק'`,
-      `המשימה "${instance.title}" אושרה! נוספו ${rewardMinutes} דקות לחשבונך.`,
+      rewardMinutes > 0 ? `משימה אושרה! +${rewardMinutes} דק'` : 'משימת חובה אושרה! ⭐',
+      rewardMinutes > 0
+        ? `המשימה "${instance.title}" אושרה! נוספו ${rewardMinutes} דקות לחשבונך.`
+        : `המשימה "${instance.title}" אושרה! קיבלת ${xpAwarded} XP.`,
       instanceId,
       now
     )
