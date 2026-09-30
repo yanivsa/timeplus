@@ -59,3 +59,13 @@ export function getIsraelStartOfMonth(date: Date = new Date()): string {
   const dateStr = getIsraelDateString(date);
   return dateStr.substring(0, 8) + '01';
 }
+
+
+export function getIsraelTimeString(date: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: ISRAEL_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date);
+}
