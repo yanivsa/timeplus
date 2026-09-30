@@ -148,6 +148,7 @@ export interface MinuteTransaction {
 
 export type ScreenTimeSource =
   | 'playstation'
+  | 'vr'
   | 'tv'
   | 'computer'
   | 'tablet'
