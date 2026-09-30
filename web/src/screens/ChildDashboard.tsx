@@ -44,6 +44,10 @@ export const ChildDashboard: React.FC = () => {
   const [requestMinutes, setRequestMinutes] = useState(30);
   const [requestSource, setRequestSource] = useState('playstation');
   const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [screenSession, setScreenSession] = useState<any>({ activeSession: null, readyRequests: [] });
+  const [screenSessionLoadedAt, setScreenSessionLoadedAt] = useState(Date.now());
+  const [timerTick, setTimerTick] = useState(Date.now());
+  const [screenSessionBusy, setScreenSessionBusy] = useState(false);
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -55,6 +59,10 @@ export const ChildDashboard: React.FC = () => {
 
       const tasksRes = await apiRequest(`/api/child/tasks?childId=${user?.id}`);
       setTasks(tasksRes.tasks || []);
+
+      const sessionRes = await apiRequest('/api/child/screen-session');
+      setScreenSession(sessionRes || { activeSession: null, readyRequests: [] });
+      setScreenSessionLoadedAt(Date.now());
 
       // Check for celebration events
       const celebRes = await apiRequest(`/api/child/celebration?childId=${user?.id}`);
@@ -79,9 +87,16 @@ export const ChildDashboard: React.FC = () => {
 
   useEffect(() => {
     loadDashboard();
-    const interval = setInterval(loadDashboard, 15000); // Polling every 15s for approvals
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadDashboard();
+    }, 60000);
     return () => clearInterval(interval);
   }, [user]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setTimerTick(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleSubmitTask = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -137,6 +152,37 @@ export const ChildDashboard: React.FC = () => {
       setSubmittingRequest(false);
     }
   };
+
+  const handleScreenSessionAction = async (action: 'start' | 'pause' | 'resume' | 'stop', requestId?: string) => {
+    if (screenSessionBusy) return;
+    if (action === 'stop' && !confirm('לסיים את זמן המסך? הזמן שנותר בסשן הזה לא יוחזר לארנק.')) return;
+    setScreenSessionBusy(true);
+    try {
+      const res = await apiRequest(`/api/child/screen-session/${action}`, {
+        method: 'POST',
+        body: JSON.stringify(requestId ? { requestId } : {}),
+      });
+      setScreenSession(res);
+      setScreenSessionLoadedAt(Date.now());
+      audio.playTap();
+    } catch (err: any) {
+      audio.playReject();
+      setStatusMessage(err.message || 'פעולת הטיימר נכשלה');
+    } finally {
+      setScreenSessionBusy(false);
+    }
+  };
+
+  const activeSession = screenSession?.activeSession;
+  const baseRemaining = Number(activeSession?.remaining_now ?? activeSession?.remaining_seconds ?? 0);
+  const elapsedSinceLoad =
+    activeSession?.status === 'running'
+      ? Math.max(0, Math.floor((timerTick - screenSessionLoadedAt) / 1000))
+      : 0;
+  const displayRemainingSeconds = Math.max(0, baseRemaining - elapsedSinceLoad);
+  const displayMinutes = Math.floor(displayRemainingSeconds / 60);
+  const displaySeconds = displayRemainingSeconds % 60;
+  const readyScreenRequest = screenSession?.readyRequests?.[0] || null;
 
   if (loading && !data) {
     return (
@@ -294,6 +340,67 @@ export const ChildDashboard: React.FC = () => {
         </button>
       </div>
 
+      {(activeSession || readyScreenRequest) && (
+        <section className="rounded-2xl bg-night-900 border border-cyan-500/30 p-4 shadow-lg">
+          {activeSession ? (
+            <div className="space-y-3 text-center">
+              <div className="flex items-center justify-center gap-2 text-cyan-300 text-xs font-bold">
+                <Clock className="h-4 w-4" />
+                <span>{activeSession.status === 'paused' ? 'זמן המסך מושהה' : 'זמן מסך פעיל'}</span>
+              </div>
+              <div className="text-5xl font-black font-mono text-white tracking-tight" dir="ltr">
+                {String(displayMinutes).padStart(2, '0')}:{String(displaySeconds).padStart(2, '0')}
+              </div>
+              <div className="text-[11px] text-purple-300">
+                {activeSession.source} · מתוך {Math.round((activeSession.allocated_seconds || 0) / 60)} דקות
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {activeSession.status === 'running' ? (
+                  <button
+                    disabled={screenSessionBusy}
+                    onClick={() => handleScreenSessionAction('pause')}
+                    className="py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold disabled:opacity-50"
+                  >
+                    השהה
+                  </button>
+                ) : (
+                  <button
+                    disabled={screenSessionBusy}
+                    onClick={() => handleScreenSessionAction('resume')}
+                    className="py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50"
+                  >
+                    המשך
+                  </button>
+                )}
+                <button
+                  disabled={screenSessionBusy}
+                  onClick={() => handleScreenSessionAction('stop')}
+                  className="py-2.5 rounded-xl bg-red-950 border border-red-700/50 text-red-200 text-xs font-bold disabled:opacity-50"
+                >
+                  סיים
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-bold text-cyan-300">זמן מסך שאושר</div>
+                <div className="text-sm font-black text-white mt-1">
+                  {readyScreenRequest.approved_minutes} דקות · {readyScreenRequest.source}
+                </div>
+              </div>
+              <button
+                disabled={screenSessionBusy}
+                onClick={() => handleScreenSessionAction('start', readyScreenRequest.id)}
+                className="py-2.5 px-4 rounded-xl bg-gradient-to-r from-cyan-500 to-indigo-500 text-white text-xs font-bold disabled:opacity-50"
+              >
+                התחל
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Pending approvals alert if any */}
       {pendingCount > 0 && (
         <div className="flex items-center justify-between p-3.5 rounded-2xl bg-indigo-950/40 border border-indigo-500/30 text-indigo-200 text-xs font-medium">
@@ -312,7 +419,7 @@ export const ChildDashboard: React.FC = () => {
               משימה מומלצת הבאה
             </span>
             <span className="text-xs font-bold text-gold-400 font-cinzel">
-              +{recommendedTask.reward_minutes} דק׳
+              {recommendedTask.task_kind === 'mandatory' ? 'חובה · XP' : `+${recommendedTask.reward_minutes} דק׳`}
             </span>
           </div>
           <h3 className="font-bold text-white text-base mb-1">{recommendedTask.title}</h3>
@@ -397,9 +504,11 @@ export const ChildDashboard: React.FC = () => {
 
                     <div className="text-left shrink-0">
                       <span className="text-base font-extrabold text-gold-400 font-cinzel block">
-                        +{task.reward_minutes}
+                        {task.task_kind === 'mandatory' ? 'XP' : `+${task.reward_minutes}`}
                       </span>
-                      <span className="text-[10px] text-purple-400/70 block">דקות</span>
+                      <span className="text-[10px] text-purple-400/70 block">
+                        {task.task_kind === 'mandatory' ? 'חובה' : 'דקות'}
+                      </span>
                     </div>
                   </div>
 
@@ -459,7 +568,9 @@ export const ChildDashboard: React.FC = () => {
 
             <p className="text-sm font-semibold text-white mb-1">{selectedTask.title}</p>
             <p className="text-xs text-purple-300/80 mb-4">
-              תגמול על סיום: +{selectedTask.reward_minutes} דקות
+              {selectedTask.task_kind === 'mandatory'
+                ? `משימת חובה · XP בלבד (ערך ${selectedTask.reward_minutes})`
+                : `תגמול על סיום: +${selectedTask.reward_minutes} דקות + XP`}
             </p>
 
             <form onSubmit={handleSubmitTask} className="space-y-4">
