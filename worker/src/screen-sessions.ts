@@ -182,6 +182,35 @@ export async function getScreenSessionState(db: D1Database, familyId: string, ch
   };
 }
 
+export async function getFamilyActiveScreenSessions(
+  db: D1Database,
+  familyId: string
+) {
+  const { results } = await db.prepare(
+    `SELECT s.*, c.name AS child_name, c.color AS child_color,
+       CASE WHEN r.reviewed_by=? THEN 'self' ELSE 'approved' END AS mode
+     FROM screen_sessions s
+     JOIN children c ON c.id=s.child_id
+     LEFT JOIN screen_time_requests r ON r.id=s.screen_time_request_id
+     WHERE s.family_id=? AND s.status IN ('running','paused')
+     ORDER BY s.created_at DESC`
+  ).bind(SELF_REVIEW_MARKER, familyId).all<SessionRow & { child_name: string; child_color: string }>();
+
+  const activeSessions = [];
+  for (const row of results || []) {
+    const normalized = await normalizeExpired(db, row);
+    if (normalized && ['running', 'paused'].includes(normalized.status)) {
+      activeSessions.push({
+        ...normalized,
+        child_name: row.child_name,
+        child_color: row.child_color,
+      });
+    }
+  }
+
+  return activeSessions;
+}
+
 export async function startScreenSession(
   db: D1Database,
   familyId: string,
