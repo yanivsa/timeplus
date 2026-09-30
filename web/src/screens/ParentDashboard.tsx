@@ -376,12 +376,17 @@ export const ParentDashboard: React.FC = () => {
     e.preventDefault();
     audio.playTap();
 
+    if (newChildPin.length < 4) {
+      setStatusMessage({ text: 'קוד הילד חייב להכיל לפחות 4 ספרות', type: 'error' });
+      return;
+    }
+
     try {
       await apiRequest('/api/parent/children', {
         method: 'POST',
         body: JSON.stringify({
           name: newChildName.trim(),
-          pin: newChildPin || '1234',
+          pin: newChildPin,
           color: newChildColor,
         }),
       });
