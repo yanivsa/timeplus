@@ -35,6 +35,7 @@ import { getRankDetails } from './gamification';
 import { getIsraelDateString } from './timezone';
 import {
   getScreenSessionState,
+  getFamilyActiveScreenSessions,
   startScreenSession,
   startSelfScreenSession,
   pauseScreenSession,
@@ -651,10 +652,13 @@ export default {
           .bind(user.familyId)
           .first<{ count: number }>();
 
+        const activeScreenSessions = await getFamilyActiveScreenSessions(env.DB, user.familyId);
+
         return json({
           children: childrenSummaries,
           totalPendingTasks: totalPendingTasks?.count || 0,
           totalPendingRequests: totalPendingRequests?.count || 0,
+          activeScreenSessions,
         });
       }
 
