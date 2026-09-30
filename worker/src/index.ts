@@ -33,7 +33,14 @@ import {
 } from './wallet';
 import { getRankDetails } from './gamification';
 import { getIsraelDateString } from './timezone';
-import { getScreenSessionState, startScreenSession, pauseScreenSession, resumeScreenSession, stopScreenSession } from './screen-sessions';
+import {
+  getScreenSessionState,
+  startScreenSession,
+  startSelfScreenSession,
+  pauseScreenSession,
+  resumeScreenSession,
+  stopScreenSession,
+} from './screen-sessions';
 import { renderPrivacyPolicyHtml } from './privacy';
 import {
   savePushSubscription,
@@ -421,6 +428,7 @@ export default {
               const child = await env.DB.prepare(`SELECT name FROM children WHERE id = ?`).bind(childId).first<{ name: string }>();
               const sourceHebrew =
                 source === 'playstation' ? 'פלייסטיישן' :
+                source === 'vr' ? 'VR' :
                 source === 'tv' ? 'טלוויזיה' :
                 source === 'tablet' ? 'טאבלט' :
                 source === 'phone' ? 'טלפון' : source;
@@ -446,6 +454,15 @@ export default {
       if (pathname === '/api/child/screen-session' && method === 'GET') {
         if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
         return json(await getScreenSessionState(env.DB, user.familyId, user.id));
+      }
+
+      if (pathname === '/api/child/screen-session/self-start' && method === 'POST') {
+        if (user.role !== 'child') return errorJson('הטיימר זמין לחשבון ילד בלבד', 403);
+        const body = (await request.json().catch(() => ({}))) as any;
+        const source = String(body.source || 'other');
+        const result = await startSelfScreenSession(env.DB, user.familyId, user.id, source);
+        if (!result.success) return errorJson(result.error || 'לא ניתן להתחיל ניצול זמן', 400);
+        return json({ success: true, ...(await getScreenSessionState(env.DB, user.familyId, user.id)) });
       }
 
       if (pathname === '/api/child/screen-session/start' && method === 'POST') {
