@@ -72,6 +72,14 @@ export const ParentDashboard: React.FC = () => {
   const [templateSchedule, setTemplateSchedule] = useState<'daily' | 'weekly' | 'custom' | 'repeatable'>('daily');
   const [templateChildIds, setTemplateChildIds] = useState<string[]>([]);
 
+  // Edit template state
+  const [editingTemplate, setEditingTemplate] = useState<TaskTemplateItem | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editReward, setEditReward] = useState<number>(15);
+  const [editSchedule, setEditSchedule] = useState<'daily' | 'weekly' | 'custom' | 'repeatable'>('daily');
+  const [editChildIds, setEditChildIds] = useState<string[]>([]);
+
   const [addChildModal, setAddChildModal] = useState(false);
   const [newChildName, setNewChildName] = useState('');
   const [newChildPin, setNewChildPin] = useState('');
@@ -311,6 +319,45 @@ export const ParentDashboard: React.FC = () => {
       await loadTemplates();
     } catch (err: any) {
       setStatusMessage({ text: err.message || 'פעולה נכשלה', type: 'error' });
+    }
+  };
+
+  // Open Edit Template Modal
+  const openEditTemplate = (tpl: TaskTemplateItem) => {
+    audio.playTap();
+    setEditingTemplate(tpl);
+    setEditTitle(tpl.title);
+    setEditDescription(tpl.description || '');
+    setEditReward(tpl.reward_minutes);
+    setEditSchedule((tpl.schedule_type as any) || 'daily');
+    setEditChildIds(tpl.assigned_child_ids && tpl.assigned_child_ids.length > 0 ? tpl.assigned_child_ids : children.map((c) => c.id));
+  };
+
+  // Update Template
+  const handleUpdateTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTemplate) return;
+    audio.playTap();
+
+    try {
+      const res = await apiRequest(`/api/parent/tasks/templates/${editingTemplate.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          description: editDescription.trim() || null,
+          rewardMinutes: editReward,
+          scheduleType: editSchedule,
+          assignedChildIds: editChildIds.length > 0 ? editChildIds : children.map((c) => c.id),
+        }),
+      });
+      audio.playApproval();
+      setEditingTemplate(null);
+      setStatusMessage({ text: res.message || 'תבנית המשימה עודכנה בהצלחה!', type: 'success' });
+      await loadTemplates();
+      await loadDashboard();
+    } catch (err: any) {
+      audio.playReject();
+      setStatusMessage({ text: err.message || 'עדכון תבנית נכשל', type: 'error' });
     }
   };
 
@@ -796,12 +843,12 @@ export const ParentDashboard: React.FC = () => {
                 key={tpl.id}
                 className="p-4 rounded-2xl bg-night-900 border border-purple-500/20 flex items-center justify-between gap-4"
               >
-                <div>
+                <div className="flex-1">
                   <h3 className="font-bold text-sm text-white">{tpl.title}</h3>
                   {tpl.description && (
                     <p className="text-xs text-purple-300/70">{tpl.description}</p>
                   )}
-                  <div className="flex items-center gap-2 mt-1.5 text-[11px] text-purple-400">
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5 text-[11px] text-purple-400">
                     <span className="font-semibold text-gold-400 font-cinzel">
                       +{tpl.reward_minutes} דקות
                     </span>
@@ -816,13 +863,28 @@ export const ParentDashboard: React.FC = () => {
                         ? 'שבועי'
                         : 'חד-פעמי'}
                     </span>
+                    {tpl.assigned_child_ids && tpl.assigned_child_ids.length > 0 && tpl.assigned_child_ids.length < children.length && (
+                      <>
+                        <span>•</span>
+                        <span className="text-purple-300">
+                          עבור: {tpl.assigned_child_ids.map((id) => children.find((c) => c.id === id)?.name).filter(Boolean).join(', ')}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    onClick={() => openEditTemplate(tpl)}
+                    className="p-2 rounded-xl text-purple-300 hover:text-white hover:bg-purple-900/50 border border-purple-500/20 hover:border-purple-400/50 transition"
+                    title="ערוך משימה"
+                  >
+                    <Edit2 className="h-4 w-4" />
+                  </button>
                   <button
                     onClick={() => handleArchiveTemplate(tpl.id)}
-                    className="p-2 rounded-xl text-red-400/70 hover:text-red-400 hover:bg-red-950/40 transition"
+                    className="p-2 rounded-xl text-red-400/70 hover:text-red-400 hover:bg-red-950/50 border border-transparent hover:border-red-500/30 transition"
                     title="העבר לארכיון"
                   >
                     <Trash2 className="h-4 w-4" />
@@ -1237,12 +1299,162 @@ export const ParentDashboard: React.FC = () => {
                 </div>
               </div>
 
+              {children.length > 0 && (
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1.5">משויך לילדים:</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {children.map((c) => {
+                      const isSelected = templateChildIds.length === 0 || templateChildIds.includes(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            if (templateChildIds.length === 0) {
+                              setTemplateChildIds(children.filter((x) => x.id !== c.id).map((x) => x.id));
+                            } else if (templateChildIds.includes(c.id)) {
+                              if (templateChildIds.length > 1) {
+                                setTemplateChildIds(templateChildIds.filter((id) => id !== c.id));
+                              }
+                            } else {
+                              setTemplateChildIds([...templateChildIds, c.id]);
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded-xl text-xs font-semibold border transition ${
+                            isSelected
+                              ? 'bg-purple-600 border-purple-400 text-white shadow-sm'
+                              : 'bg-night-950 border-purple-500/20 text-purple-300/60 hover:text-white'
+                          }`}
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <button
                 type="submit"
                 className="w-full py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 text-sm shadow-md"
               >
                 צור משימה
               </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL: EDIT TEMPLATE --- */}
+      {editingTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night-950/80 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-base text-gold-300 font-cinzel">עריכת תבנית משימה</h3>
+              <button onClick={() => setEditingTemplate(null)}>
+                <X className="h-5 w-5 text-purple-400 hover:text-white" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateTemplate} className="space-y-4">
+              <div>
+                <label className="block text-xs text-purple-200 mb-1">שם המשימה</label>
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  required
+                  placeholder="שם המשימה..."
+                  className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2.5 text-sm text-white focus:outline-none focus:border-gold-400"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-purple-200 mb-1">תיאור</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="פירוט המשימה..."
+                  rows={2}
+                  className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2.5 text-xs text-white focus:outline-none focus:border-gold-400"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1">תגמול (דקות)</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={editReward}
+                    onChange={(e) => setEditReward(Number(e.target.value))}
+                    required
+                    className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2 text-center text-sm font-mono text-white focus:outline-none focus:border-gold-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1">תדירות</label>
+                  <select
+                    value={editSchedule}
+                    onChange={(e) => setEditSchedule(e.target.value as any)}
+                    className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2 text-xs text-white focus:outline-none focus:border-gold-400"
+                  >
+                    <option value="daily">יומי (פעם ביום)</option>
+                    <option value="repeatable">ללא הגבלה (אימון חוזר / כל פעם מחדש)</option>
+                    <option value="weekly">שבועי</option>
+                    <option value="one_time">חד-פעמי</option>
+                  </select>
+                </div>
+              </div>
+
+              {children.length > 0 && (
+                <div>
+                  <label className="block text-xs text-purple-200 mb-1.5">משויך לילדים:</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {children.map((c) => {
+                      const isSelected = editChildIds.includes(c.id);
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              if (editChildIds.length > 1) {
+                                setEditChildIds(editChildIds.filter((id) => id !== c.id));
+                              }
+                            } else {
+                              setEditChildIds([...editChildIds, c.id]);
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded-xl text-xs font-semibold border transition ${
+                            isSelected
+                              ? 'bg-purple-600 border-purple-400 text-white shadow-sm'
+                              : 'bg-night-950 border-purple-500/20 text-purple-300/60 hover:text-white'
+                          }`}
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingTemplate(null)}
+                  className="flex-1 py-3 rounded-2xl bg-night-950 border border-purple-500/30 text-purple-300 text-xs font-bold hover:bg-night-850 transition"
+                >
+                  ביטול
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 text-sm shadow-md hover:from-gold-300 hover:to-amber-300 transition"
+                >
+                  שמור שינויים
+                </button>
+              </div>
             </form>
           </div>
         </div>

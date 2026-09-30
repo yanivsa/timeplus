@@ -691,6 +691,7 @@ export default {
         const title = body.title?.trim();
         const description = body.description !== undefined ? body.description?.trim() : null;
         const rewardMinutes = Number(body.rewardMinutes);
+        const scheduleType = body.scheduleType || null;
         const isActive = body.isActive !== undefined ? (body.isActive ? 1 : 0) : 1;
         const assignedChildIds = Array.isArray(body.assignedChildIds) ? body.assignedChildIds : null;
         const now = new Date().toISOString();
@@ -700,11 +701,12 @@ export default {
            SET title = COALESCE(?, title),
                description = COALESCE(?, description),
                reward_minutes = COALESCE(?, reward_minutes),
+               schedule_type = COALESCE(?, schedule_type),
                is_active = ?,
                updated_at = ?
            WHERE id = ? AND family_id = ?`
         )
-          .bind(title, description, isNaN(rewardMinutes) ? null : rewardMinutes, isActive, now, templateId, user.familyId)
+          .bind(title, description, isNaN(rewardMinutes) ? null : rewardMinutes, scheduleType, isActive, now, templateId, user.familyId)
           .run();
 
         if (assignedChildIds) {
@@ -713,6 +715,8 @@ export default {
             await env.DB.prepare(`INSERT INTO task_template_children (template_id, child_id) VALUES (?, ?)`).bind(templateId, cId).run();
           }
         }
+
+        await ensureDailyTaskInstances(env.DB, user.familyId);
 
         return json({ success: true, message: 'תבנית המשימה עודכנה בהצלחה' });
       }
