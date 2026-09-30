@@ -21,7 +21,7 @@ export function generateSalt(byteLength = 16): string {
 export async function hashPin(
   pin: string,
   saltHex: string,
-  pepperSecret = 'timeplus_secure_pepper_seed'
+  pepperSecret: string
 ): Promise<string> {
   const encoder = new TextEncoder();
   const rawKey = encoder.encode(pin + pepperSecret);
