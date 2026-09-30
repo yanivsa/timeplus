@@ -9,8 +9,8 @@ export async function requestScreenTime(
   minutes: number,
   source: ScreenTimeSource
 ): Promise<{ success: boolean; error?: string; requestId?: string }> {
-  if (minutes <= 0) {
-    return { success: false, error: 'כמות הדקות חייבת להיות גדולה מאפס' };
+  if (!Number.isInteger(minutes) || minutes <= 0) {
+    return { success: false, error: 'כמות הדקות חייבת להיות מספר שלם וגדול מאפס' };
   }
 
   // Check child's available balance: Child cannot independently overspend
