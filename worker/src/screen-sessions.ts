@@ -280,15 +280,24 @@ export async function startSelfScreenSession(
 
 export async function pauseScreenSession(db: D1Database, familyId: string, childId: string) {
   const row = await db.prepare(
-    `SELECT * FROM screen_sessions
-     WHERE family_id=? AND child_id=? AND status='running'
-     ORDER BY created_at DESC LIMIT 1`
-  ).bind(familyId, childId).first<SessionRow>();
+    `SELECT s.*,
+       CASE WHEN r.reviewed_by=? THEN 'self' ELSE 'approved' END AS mode
+     FROM screen_sessions s
+     LEFT JOIN screen_time_requests r ON r.id=s.screen_time_request_id
+     WHERE s.family_id=? AND s.child_id=? AND s.status='running'
+     ORDER BY s.created_at DESC LIMIT 1`
+  ).bind(SELF_REVIEW_MARKER, familyId, childId).first<SessionRow>();
   if (!row) return { success: false, error: 'אין טיימר פעיל' };
 
   const remaining = remainingNow(row);
   const now = new Date().toISOString();
   const status = remaining <= 0 ? 'finished' : 'paused';
+  let spentMinutes = 0;
+
+  if (status === 'finished') {
+    const usage = await recordSelfUsage(db, row, 0);
+    spentMinutes = usage.spentMinutes;
+  }
 
   await db.prepare(
     `UPDATE screen_sessions
@@ -297,7 +306,7 @@ export async function pauseScreenSession(db: D1Database, familyId: string, child
      WHERE id=? AND status='running'`
   ).bind(status, remaining, now, status, now, now, row.id).run();
 
-  return { success: true, remainingSeconds: remaining, status };
+  return { success: true, remainingSeconds: remaining, status, spentMinutes };
 }
 
 export async function resumeScreenSession(db: D1Database, familyId: string, childId: string) {
