@@ -924,6 +924,72 @@ export default {
         return json({ transactions });
       }
 
+      if (pathname.match(/^\/api\/parent\/children\/[^/]+\/details$/) && method === 'GET') {
+        const childId = pathname.split('/')[4];
+        const todayIsrael = getIsraelDateString();
+
+        const child = await env.DB.prepare(
+          `SELECT c.*, cp.level, cp.xp, cp.current_streak_days, cp.best_streak_days, cp.last_active_date
+           FROM children c
+           LEFT JOIN child_progress cp ON cp.child_id = c.id
+           WHERE c.id = ? AND c.family_id = ?`
+        )
+          .bind(childId, user.familyId)
+          .first<any>();
+
+        if (!child) {
+          return errorJson('הילד לא נמצא', 404);
+        }
+
+        const wallet = await getChildWalletSummary(env.DB, childId);
+        const rank = getRankDetails(child.xp || 0);
+
+        const { results: transactions } = await env.DB.prepare(
+          `SELECT * FROM minute_transactions 
+           WHERE child_id = ? AND family_id = ?
+           ORDER BY created_at DESC LIMIT 60`
+        )
+          .bind(childId, user.familyId)
+          .all();
+
+        const { results: tasks } = await env.DB.prepare(
+          `SELECT ti.*, ts.status as submission_status, ts.note as submission_note, ts.photo_object_key
+           FROM task_instances ti
+           LEFT JOIN task_submissions ts ON ts.task_instance_id = ti.id AND ts.status = 'pending'
+           WHERE ti.child_id = ? AND (ti.due_date = ? OR ti.status = 'submitted')
+           ORDER BY 
+             CASE ti.status 
+               WHEN 'submitted' THEN 1 
+               WHEN 'open' THEN 2 
+               WHEN 'approved' THEN 3 
+               ELSE 4 
+             END, 
+             ti.reward_minutes DESC`
+        )
+          .bind(childId, todayIsrael)
+          .all();
+
+        const { results: screenRequests } = await env.DB.prepare(
+          `SELECT * FROM screen_time_requests
+           WHERE child_id = ? AND family_id = ?
+           ORDER BY requested_at DESC LIMIT 20`
+        )
+          .bind(childId, user.familyId)
+          .all();
+
+        return json({
+          child: {
+            ...child,
+            rankTitle: rank.rankTitle,
+            progressPercent: rank.progressPercent,
+          },
+          wallet,
+          transactions: transactions || [],
+          tasks: tasks || [],
+          screenRequests: screenRequests || [],
+        });
+      }
+
       if (pathname === '/api/parent/stats' && method === 'GET') {
         const { results: children } = await env.DB.prepare(
           `SELECT id, name FROM children WHERE family_id = ?`

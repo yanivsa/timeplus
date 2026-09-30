@@ -33,6 +33,10 @@ import {
   Volume2,
   VolumeX,
   UserPlus,
+  ChevronLeft,
+  TrendingUp,
+  TrendingDown,
+  User,
 } from 'lucide-react';
 import { NotificationBell } from '../components/NotificationBell';
 
@@ -85,6 +89,11 @@ export const ParentDashboard: React.FC = () => {
   const [newChildName, setNewChildName] = useState('');
   const [newChildPin, setNewChildPin] = useState('');
   const [newChildColor, setNewChildColor] = useState('#38bdf8');
+
+  // Child details modal state
+  const [selectedChildDetails, setSelectedChildDetails] = useState<any | null>(null);
+  const [childDetailsLoading, setChildDetailsLoading] = useState(false);
+  const [childDetailsTab, setChildDetailsTab] = useState<'transactions' | 'tasks' | 'requests'>('transactions');
 
   // Load parent data
   const loadDashboard = async () => {
@@ -388,6 +397,37 @@ export const ParentDashboard: React.FC = () => {
     }
   };
 
+  const openChildDetails = async (child: ChildSummary) => {
+    audio.playTap();
+    setSelectedChildDetails({
+      child,
+      wallet: child.wallet,
+      transactions: [],
+      tasks: [],
+      screenRequests: [],
+      loading: true,
+    });
+    setChildDetailsLoading(true);
+    setChildDetailsTab('transactions');
+
+    try {
+      const res = await apiRequest(`/api/parent/children/${child.id}/details`);
+      setSelectedChildDetails({
+        child: res.child || child,
+        wallet: res.wallet || child.wallet,
+        transactions: res.transactions || [],
+        tasks: res.tasks || [],
+        screenRequests: res.screenRequests || [],
+        loading: false,
+      });
+    } catch (err) {
+      console.error('Failed to load child details', err);
+      setSelectedChildDetails((prev: any) => (prev ? { ...prev, loading: false } : null));
+    } finally {
+      setChildDetailsLoading(false);
+    }
+  };
+
   const totalPending = pendingTasks.length + pendingRequests.length;
 
   return (
@@ -546,11 +586,15 @@ export const ParentDashboard: React.FC = () => {
                 key={child.id}
                 className="rounded-3xl bg-night-900/80 border-2 border-purple-500/20 hover:border-gold-500/40 p-5 shadow-xl transition-all space-y-4"
               >
-                {/* Child Card Header */}
-                <div className="flex items-center justify-between">
+                {/* Child Card Header (Clickable for full history & breakdown) */}
+                <div
+                  onClick={() => openChildDetails(child)}
+                  className="flex items-center justify-between cursor-pointer group hover:opacity-95 transition"
+                  title="לחץ לצפייה בפירוט הפעילות והדקות של הילד"
+                >
                   <div className="flex items-center gap-3">
                     <div
-                      className="h-12 w-12 rounded-2xl flex items-center justify-center border-2 shadow-md"
+                      className="h-12 w-12 rounded-2xl flex items-center justify-center border-2 shadow-md group-hover:scale-105 transition"
                       style={{
                         borderColor: child.color,
                         backgroundColor: `${child.color}20`,
@@ -559,7 +603,10 @@ export const ParentDashboard: React.FC = () => {
                       <Sparkles className="h-6 w-6" style={{ color: child.color }} />
                     </div>
                     <div>
-                      <h2 className="text-lg font-bold text-white">{child.name}</h2>
+                      <div className="flex items-center gap-1.5">
+                        <h2 className="text-lg font-bold text-white group-hover:text-gold-300 transition">{child.name}</h2>
+                        <ChevronLeft className="h-4 w-4 text-purple-400 group-hover:text-gold-400 group-hover:-translate-x-1 transition" />
+                      </div>
                       <div className="flex items-center gap-2 text-xs text-purple-300">
                         <span className="font-semibold text-gold-400 font-cinzel">
                           {child.rankTitle} (רמה {child.level})
@@ -648,6 +695,16 @@ export const ParentDashboard: React.FC = () => {
                     <span>רשום ניצול מסך</span>
                   </button>
                 </div>
+
+                {/* Direct link button to full details */}
+                <button
+                  onClick={() => openChildDetails(child)}
+                  className="w-full py-2 px-3 rounded-xl bg-purple-950/40 hover:bg-purple-900/60 border border-purple-500/30 text-purple-200 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                >
+                  <History className="h-3.5 w-3.5 text-gold-400" />
+                  <span>פירוט מלא: ממה הרוויח ומה עשה</span>
+                  <ChevronLeft className="h-3.5 w-3.5 text-gold-400" />
+                </button>
               </div>
             ))}
           </div>
@@ -1524,6 +1581,300 @@ export const ParentDashboard: React.FC = () => {
                 הוסף ילד לאקדמיה
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL: CHILD SPECIFIC ACTIVITY & LEDGER DETAILS --- */}
+      {selectedChildDetails && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-night-950/85 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-3xl bg-night-900 border border-purple-500/40 shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-4 sm:p-5 border-b border-purple-500/20 bg-night-950/60 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className="h-12 w-12 rounded-2xl flex items-center justify-center border-2 shadow-md shrink-0"
+                  style={{
+                    borderColor: selectedChildDetails.child.color || '#38bdf8',
+                    backgroundColor: `${selectedChildDetails.child.color || '#38bdf8'}25`,
+                  }}
+                >
+                  <Sparkles className="h-6 w-6" style={{ color: selectedChildDetails.child.color || '#38bdf8' }} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-bold text-white">{selectedChildDetails.child.name}</h2>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-purple-900/60 border border-purple-500/30 text-gold-300 font-cinzel">
+                      {selectedChildDetails.child.rankTitle} (רמה {selectedChildDetails.child.level})
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-purple-300">
+                    <span className="flex items-center gap-1 text-amber-400 font-bold">
+                      <Flame className="h-3.5 w-3.5" />
+                      <span>רצף {selectedChildDetails.child.current_streak_days} ימים</span>
+                    </span>
+                    <span>•</span>
+                    <span>XP: {selectedChildDetails.child.xp}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <div className="text-left">
+                  <span
+                    className={`text-2xl sm:text-3xl font-black font-cinzel ${
+                      selectedChildDetails.child.available_minutes < 0 ? 'text-red-400' : 'text-gold-400'
+                    }`}
+                  >
+                    {selectedChildDetails.child.available_minutes}
+                  </span>
+                  <span className="block text-[10px] text-purple-400 font-bold">יתרת דקות זמינה</span>
+                </div>
+                <button
+                  onClick={() => setSelectedChildDetails(null)}
+                  className="p-2 rounded-xl text-purple-400 hover:text-white hover:bg-purple-950/60 transition"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Financial Summary Cards */}
+            <div className="p-4 sm:p-5 bg-night-950/40 border-b border-purple-500/20 grid grid-cols-3 gap-2 sm:gap-3 text-center">
+              <div className="p-2.5 rounded-2xl bg-night-900/80 border border-purple-500/20">
+                <span className="text-[10px] text-purple-400 block font-semibold mb-1">היום</span>
+                <div className="text-xs font-bold text-emerald-400">+{selectedChildDetails.wallet?.earnedToday || 0} הרוויח</div>
+                <div className="text-xs font-bold text-purple-300">-{selectedChildDetails.wallet?.spentToday || 0} ניצל</div>
+              </div>
+
+              <div className="p-2.5 rounded-2xl bg-night-900/80 border border-purple-500/20">
+                <span className="text-[10px] text-purple-400 block font-semibold mb-1">השבוע</span>
+                <div className="text-xs font-bold text-emerald-400">+{selectedChildDetails.wallet?.earnedThisWeek || 0} הרוויח</div>
+                <div className="text-xs font-bold text-purple-300">-{selectedChildDetails.wallet?.spentThisWeek || 0} ניצל</div>
+              </div>
+
+              <div className="p-2.5 rounded-2xl bg-night-900/80 border border-purple-500/20">
+                <span className="text-[10px] text-purple-400 block font-semibold mb-1">החודש</span>
+                <div className="text-xs font-bold text-emerald-400">+{selectedChildDetails.wallet?.earnedThisMonth || 0} הרוויח</div>
+                <div className="text-xs font-bold text-purple-300">-{selectedChildDetails.wallet?.spentThisMonth || 0} ניצל</div>
+              </div>
+            </div>
+
+            {/* Tab navigation inside modal */}
+            <div className="flex border-b border-purple-500/20 px-4 pt-2 gap-2 bg-night-900">
+              <button
+                onClick={() => setChildDetailsTab('transactions')}
+                className={`py-2 px-3 text-xs font-bold border-b-2 transition flex items-center gap-1.5 ${
+                  childDetailsTab === 'transactions'
+                    ? 'border-gold-400 text-gold-300'
+                    : 'border-transparent text-purple-400 hover:text-purple-200'
+                }`}
+              >
+                <History className="h-4 w-4" />
+                <span>תנועות ורווח דקות ({selectedChildDetails.transactions?.length || 0})</span>
+              </button>
+
+              <button
+                onClick={() => setChildDetailsTab('tasks')}
+                className={`py-2 px-3 text-xs font-bold border-b-2 transition flex items-center gap-1.5 ${
+                  childDetailsTab === 'tasks'
+                    ? 'border-gold-400 text-gold-300'
+                    : 'border-transparent text-purple-400 hover:text-purple-200'
+                }`}
+              >
+                <ListTodo className="h-4 w-4" />
+                <span>משימות ({selectedChildDetails.tasks?.length || 0})</span>
+              </button>
+
+              <button
+                onClick={() => setChildDetailsTab('requests')}
+                className={`py-2 px-3 text-xs font-bold border-b-2 transition flex items-center gap-1.5 ${
+                  childDetailsTab === 'requests'
+                    ? 'border-gold-400 text-gold-300'
+                    : 'border-transparent text-purple-400 hover:text-purple-200'
+                }`}
+              >
+                <Tv className="h-4 w-4" />
+                <span>בקשות מסך ({selectedChildDetails.screenRequests?.length || 0})</span>
+              </button>
+            </div>
+
+            {/* Scrollable Content Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
+              {childDetailsLoading && (
+                <div className="py-12 text-center text-xs text-purple-300">טוען נתונים...</div>
+              )}
+
+              {/* 1. TRANSACTIONS TAB */}
+              {!childDetailsLoading && childDetailsTab === 'transactions' && (
+                <div className="space-y-2">
+                  {selectedChildDetails.transactions?.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-purple-400/60">אין עדיין תנועות דקות רשומות</div>
+                  ) : (
+                    selectedChildDetails.transactions.map((tx: any) => {
+                      const isEarn = tx.type === 'earn' || tx.amount > 0;
+                      return (
+                        <div
+                          key={tx.id}
+                          className="p-3 rounded-2xl bg-night-950/60 border border-purple-500/20 flex items-center justify-between gap-3"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <span
+                              className={`h-8 w-8 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
+                                isEarn
+                                  ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/30'
+                                  : 'bg-red-950/80 text-red-400 border border-red-500/30'
+                              }`}
+                            >
+                              {isEarn ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+                            </span>
+                            <div>
+                              <div className="font-bold text-xs text-white">{tx.reason || (isEarn ? 'הרוויח דקות' : 'ניצול דקות מסך')}</div>
+                              <div className="text-[10px] text-purple-400/70 mt-0.5">
+                                {new Date(tx.created_at).toLocaleString('he-IL', {
+                                  month: 'numeric',
+                                  day: 'numeric',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                                {' • '}
+                                <span>יתרה אחרי: {tx.balance_after} דק׳</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-left shrink-0">
+                            <span className={`font-mono font-bold text-sm ${isEarn ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {isEarn ? `+${tx.amount}` : tx.amount} דק׳
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* 2. TASKS TAB */}
+              {!childDetailsLoading && childDetailsTab === 'tasks' && (
+                <div className="space-y-2">
+                  {selectedChildDetails.tasks?.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-purple-400/60">אין משימות מוגדרות להיום</div>
+                  ) : (
+                    selectedChildDetails.tasks.map((task: any) => (
+                      <div
+                        key={task.id}
+                        className="p-3 rounded-2xl bg-night-950/60 border border-purple-500/20 flex items-center justify-between gap-3"
+                      >
+                        <div>
+                          <div className="font-bold text-xs text-white">{task.title}</div>
+                          {task.description && (
+                            <div className="text-[11px] text-purple-300/70 mt-0.5">{task.description}</div>
+                          )}
+                          <div className="flex items-center gap-2 mt-1 text-[10px] text-purple-400">
+                            <span className="font-semibold text-gold-400 font-cinzel">+{task.reward_minutes} דקות</span>
+                            <span>•</span>
+                            <span>
+                              סטטוס:{' '}
+                              {task.status === 'approved'
+                                ? 'אושר ✅'
+                                : task.status === 'submitted'
+                                ? 'ממתין לאישורך ⏳'
+                                : 'פתוח לביצוע 📌'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {task.status === 'submitted' && (
+                          <button
+                            onClick={async () => {
+                              await handleApproveTask(task.id);
+                              await openChildDetails(selectedChildDetails.child);
+                            }}
+                            className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shrink-0 transition"
+                          >
+                            אשר משימה
+                          </button>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* 3. SCREEN REQUESTS TAB */}
+              {!childDetailsLoading && childDetailsTab === 'requests' && (
+                <div className="space-y-2">
+                  {selectedChildDetails.screenRequests?.length === 0 ? (
+                    <div className="py-8 text-center text-xs text-purple-400/60">אין בקשות זמן מסך</div>
+                  ) : (
+                    selectedChildDetails.screenRequests.map((req: any) => (
+                      <div
+                        key={req.id}
+                        className="p-3 rounded-2xl bg-night-950/60 border border-purple-500/20 flex items-center justify-between gap-3"
+                      >
+                        <div>
+                          <div className="font-bold text-xs text-white">
+                            {req.requested_minutes} דקות עבור {req.source}
+                          </div>
+                          <div className="text-[10px] text-purple-400/70 mt-0.5">
+                            {new Date(req.requested_at).toLocaleString('he-IL', {
+                              month: 'numeric',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </div>
+                        </div>
+
+                        <span
+                          className={`px-2.5 py-1 rounded-xl text-[11px] font-bold ${
+                            req.status === 'approved'
+                              ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-500/30'
+                              : req.status === 'rejected'
+                              ? 'bg-red-950/80 text-red-400 border border-red-500/30'
+                              : 'bg-amber-950/80 text-amber-300 border border-amber-500/30'
+                          }`}
+                        >
+                          {req.status === 'approved'
+                            ? `אושר (${req.approved_minutes} דק׳)`
+                            : req.status === 'rejected'
+                            ? 'נדחה'
+                            : 'ממתין לאישור'}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Bottom Actions */}
+            <div className="p-4 border-t border-purple-500/20 bg-night-950 flex items-center gap-2">
+              <button
+                onClick={() => {
+                  setAdjustModalChild(selectedChildDetails.child);
+                  setAdjustMinutesDelta(15);
+                  setAdjustReason('');
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-night-900 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
+              >
+                <PlusCircle className="h-4 w-4 text-gold-400" />
+                <span>הוסף / הפחת דקות</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setUsageModalChild(selectedChildDetails.child);
+                  setUsageMinutes(30);
+                  setUsageReason('');
+                }}
+                className="flex-1 py-2.5 px-3 rounded-xl bg-night-900 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
+              >
+                <Tv className="h-4 w-4 text-purple-400" />
+                <span>רשום ניצול מסך</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
