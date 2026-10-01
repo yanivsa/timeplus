@@ -323,7 +323,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun targetUrlFromIntent(sourceIntent: Intent?): String {
-        val path = sourceIntent?.getStringExtra("notification_url")?.trim().orEmpty()
+        val path = (
+            sourceIntent?.getStringExtra("notification_url")
+                ?: sourceIntent?.getStringExtra("url")
+        )?.trim().orEmpty()
         if (path.isBlank() || !path.startsWith("/")) return PRODUCTION_URL
         return PRODUCTION_URL + path
     }
