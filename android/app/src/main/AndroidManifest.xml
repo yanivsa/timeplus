@@ -14,6 +14,10 @@
         android:theme="@style/Theme.TimePlus"
         android:usesCleartextTraffic="false">
 
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="timeplus_updates" />
+
         <service
             android:name=".TimePlusFirebaseMessagingService"
             android:exported="false">
