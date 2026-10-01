@@ -28,3 +28,18 @@ export async function registerNativeFcmToken(): Promise<boolean> {
 
   return true;
 }
+
+
+export async function unregisterNativeFcmToken(): Promise<boolean> {
+  if (!isNativeAndroidApp()) return false;
+
+  const token = window.TimePlusAndroid?.getFcmToken?.()?.trim() || '';
+  if (!token) return false;
+
+  await apiRequest('/api/push/fcm-unsubscribe', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
+
+  return true;
+}
