@@ -124,7 +124,7 @@ async function creditRecentCorrectAnswers(env, profileId, snapshot) {
       )
       .run();
 
-    if (Number(result?.meta?.changes || 0) === 1) credited += 1;
+    if (Number(result?.meta?.changes || 0) > 0) credited += 1;
   }
 
   return credited;
