@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useAuth } from './context/AuthContext';
 import { BackgroundStars } from './components/BackgroundStars';
 import { OfflineBanner } from './components/OfflineBanner';
@@ -7,9 +7,36 @@ import { LoginScreen } from './screens/LoginScreen';
 import { SetupScreen } from './screens/SetupScreen';
 import { ChildDashboard } from './screens/ChildDashboard';
 import { ParentDashboard } from './screens/ParentDashboard';
+import { registerNativeFcmToken } from './services/nativePush';
 
 export const App: React.FC = () => {
   const { user, loading, isInitialized } = useAuth();
+
+  useEffect(() => {
+    if (!user) return;
+
+    let stopped = false;
+
+    const register = async () => {
+      try {
+        if (!stopped) await registerNativeFcmToken();
+      } catch (err) {
+        console.error('Failed to register native FCM token:', err);
+      }
+    };
+
+    register();
+    const retryTimer = window.setTimeout(register, 5000);
+    const tokenHandler = () => register();
+    window.addEventListener('timeplus:fcm-token', tokenHandler);
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(retryTimer);
+      window.removeEventListener('timeplus:fcm-token', tokenHandler);
+    };
+  }, [user?.id, user?.role]);
+
 
   if (loading) {
     return (
