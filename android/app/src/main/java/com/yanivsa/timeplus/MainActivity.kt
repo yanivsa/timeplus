@@ -1,15 +1,21 @@
 package com.yanivsa.timeplus
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -23,7 +29,11 @@ import android.widget.ProgressBar
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.firebase.FirebaseApp
+import com.google.firebase.messaging.FirebaseMessaging
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -39,6 +49,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var retryButton: Button
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -74,10 +88,13 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
         setupBackNavigation()
         setupListeners()
+        createNotificationChannel()
+        requestNotificationPermission()
+        setupFirebaseMessaging()
 
         if (isNetworkAvailable()) {
             showWebView()
-            webView.loadUrl(PRODUCTION_URL)
+            webView.loadUrl(targetUrlFromIntent(intent))
         } else {
             showOfflineView()
         }
@@ -99,7 +116,8 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.0"
+        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.2"
+        webView.addJavascriptInterface(NativePushBridge(this), "TimePlusAndroid")
 
         val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         WebView.setWebContentsDebuggingEnabled(isDebuggable)
@@ -133,6 +151,7 @@ class MainActivity : AppCompatActivity() {
                 progressBar.visibility = View.GONE
                 swipeRefreshLayout.isRefreshing = false
                 showWebView()
+                notifyWebOfFcmToken()
             }
 
             override fun onReceivedError(
@@ -234,6 +253,94 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         CookieManager.getInstance().flush()
+        setupFirebaseMessaging()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (::webView.isInitialized && isNetworkAvailable()) {
+            webView.loadUrl(targetUrlFromIntent(intent))
+        }
+    }
+
+
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                TimePlusFirebaseMessagingService.CHANNEL_ID,
+                "Time+ התראות",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "בקשות זמן, אישורים ועדכוני משימות"
+                enableVibration(true)
+            }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun requestNotificationPermission() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun setupFirebaseMessaging() {
+        if (FirebaseApp.getApps(this).isEmpty()) return
+
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (!task.isSuccessful) return@addOnCompleteListener
+            val token = task.result ?: return@addOnCompleteListener
+            if (token.isBlank()) return@addOnCompleteListener
+
+            getSharedPreferences(TimePlusFirebaseMessagingService.PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putString(TimePlusFirebaseMessagingService.KEY_FCM_TOKEN, token)
+                .apply()
+
+            notifyWebOfFcmToken()
+        }
+    }
+
+    private fun notifyWebOfFcmToken() {
+        if (!::webView.isInitialized) return
+
+        val token = getSharedPreferences(TimePlusFirebaseMessagingService.PREFS_NAME, MODE_PRIVATE)
+            .getString(TimePlusFirebaseMessagingService.KEY_FCM_TOKEN, null)
+            ?: return
+
+        val quotedToken = JSONObject.quote(token)
+        webView.post {
+            webView.evaluateJavascript(
+                "window.dispatchEvent(new CustomEvent('timeplus:fcm-token',{detail:$quotedToken}));",
+                null
+            )
+        }
+    }
+
+    private fun targetUrlFromIntent(sourceIntent: Intent?): String {
+        val path = sourceIntent?.getStringExtra("notification_url")?.trim().orEmpty()
+        if (path.isBlank() || !path.startsWith("/")) return PRODUCTION_URL
+        return PRODUCTION_URL + path
+    }
+
+    private class NativePushBridge(private val context: Context) {
+        @JavascriptInterface
+        fun getFcmToken(): String {
+            return context
+                .getSharedPreferences(TimePlusFirebaseMessagingService.PREFS_NAME, MODE_PRIVATE)
+                .getString(TimePlusFirebaseMessagingService.KEY_FCM_TOKEN, "")
+                .orEmpty()
+        }
+
+        @JavascriptInterface
+        fun getDeviceName(): String {
+            return "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+        }
     }
 
     override fun onPause() {
