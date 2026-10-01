@@ -135,7 +135,38 @@ class AudioManager {
     }
   }
 
-  // 5. Rejection / Warning (soft low neutral tone)
+  // 5. Screen-time finished alarm (distinct repeated alert)
+  public playTimeUp() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const pattern = [
+        { freq: 880, start: 0.00, dur: 0.28 },
+        { freq: 660, start: 0.34, dur: 0.28 },
+        { freq: 880, start: 0.68, dur: 0.28 },
+        { freq: 660, start: 1.02, dur: 0.28 },
+        { freq: 1046.5, start: 1.40, dur: 0.60 },
+      ];
+
+      pattern.forEach(({ freq, start, dur }) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(freq, now + start);
+        gain.gain.setValueAtTime(0.16, now + start);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + start + dur);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + start);
+        osc.stop(now + start + dur + 0.03);
+      });
+    } catch {
+      // Audio errors are non-fatal
+    }
+  }
+
+  // 6. Rejection / Warning (soft low neutral tone)
   public playReject() {
     const ctx = this.getContext();
     if (!ctx) return;
