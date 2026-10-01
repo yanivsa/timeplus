@@ -332,7 +332,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun getFcmToken(): String {
             return context
-                .getSharedPreferences(TimePlusFirebaseMessagingService.PREFS_NAME, MODE_PRIVATE)
+                .getSharedPreferences(TimePlusFirebaseMessagingService.PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(TimePlusFirebaseMessagingService.KEY_FCM_TOKEN, "")
                 .orEmpty()
         }
