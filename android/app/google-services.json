@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "265084623477",
+    "project_id": "timeplus-e2f2f",
+    "storage_bucket": "timeplus-e2f2f.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:265084623477:android:e3a7630811d0824e1d363c",
+        "android_client_info": {
+          "package_name": "com.yanivsa.timeplus"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCmalJrlKLeLgctQBiYD2egUSqeofAma_U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
