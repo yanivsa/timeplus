@@ -46,6 +46,8 @@ import { renderPrivacyPolicyHtml } from './privacy';
 import {
   savePushSubscription,
   removePushSubscription,
+  saveFcmToken,
+  removeFcmToken,
   getNotifications,
   markNotificationsAsRead,
   sendNotification,
@@ -566,6 +568,34 @@ export default {
         return json({ success: true });
       }
 
+      if (pathname === '/api/push/fcm-subscribe' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const token = String(body.token || '').trim();
+        if (!token || token.length < 20 || token.length > 4096) {
+          return errorJson('FCM token אינו תקין', 400);
+        }
+
+        await saveFcmToken(
+          env.DB,
+          user.familyId,
+          user.role,
+          user.role === 'child' ? user.id : null,
+          token,
+          body.deviceName ? String(body.deviceName).slice(0, 160) : undefined
+        );
+
+        return json({ success: true, message: 'המכשיר נרשם להתראות Android בהצלחה!' });
+      }
+
+      if (pathname === '/api/push/fcm-unsubscribe' && method === 'POST') {
+        const body = (await request.json().catch(() => ({}))) as any;
+        const token = String(body.token || '').trim();
+        if (token) {
+          await removeFcmToken(env.DB, token);
+        }
+        return json({ success: true });
+      }
+
       if (pathname === '/api/notifications' && method === 'GET') {
         const data = await getNotifications(
           env.DB,
@@ -779,6 +809,33 @@ export default {
         if (!result.success) {
           return errorJson(result.error || 'דחיית המשימה נכשלה', 400);
         }
+
+        ctx.waitUntil(
+          (async () => {
+            try {
+              const task = await env.DB.prepare(
+                `SELECT child_id, title FROM task_instances WHERE id = ?`
+              ).bind(instanceId).first<{ child_id: string; title: string }>();
+              if (task) {
+                await sendNotification(env.DB, env, {
+                  familyId: user.familyId,
+                  recipientRole: 'child',
+                  recipientChildId: task.child_id,
+                  type: 'task_rejected',
+                  title: 'עדכון לגבי המשימה',
+                  message: reason
+                    ? `המשימה "${task.title}" לא אושרה כרגע: ${reason}`
+                    : `המשימה "${task.title}" לא אושרה כרגע`,
+                  entityType: 'task_instance',
+                  entityId: instanceId,
+                });
+              }
+            } catch (err) {
+              console.error('Failed to dispatch task rejection push:', err);
+            }
+          })()
+        );
+
         return json({ success: true, message: 'המשימה נדחתה' });
       }
 
