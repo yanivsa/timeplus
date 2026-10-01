@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../services/api';
 import { audio } from '../services/audio';
@@ -51,6 +51,8 @@ export const ChildDashboard: React.FC = () => {
   const [screenSessionLoadedAt, setScreenSessionLoadedAt] = useState(Date.now());
   const [timerTick, setTimerTick] = useState(Date.now());
   const [screenSessionBusy, setScreenSessionBusy] = useState(false);
+  const [showTimeUpAlert, setShowTimeUpAlert] = useState(false);
+  const alertedSessionRef = useRef<string | null>(null);
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -244,6 +246,20 @@ export const ChildDashboard: React.FC = () => {
 
   useEffect(() => {
     if (activeSession?.status !== 'running' || displayRemainingSeconds > 0) return;
+    if (!activeSession?.id || alertedSessionRef.current === activeSession.id) return;
+
+    alertedSessionRef.current = activeSession.id;
+    audio.playTimeUp();
+
+    try {
+      navigator.vibrate?.([400, 180, 400, 180, 800]);
+    } catch {
+      // Vibration is best-effort and not supported on every device/browser.
+    }
+
+    setStatusMessage('הזמן נגמר ⏰');
+    setShowTimeUpAlert(true);
+
     const timeout = window.setTimeout(() => {
       loadDashboard();
     }, 500);
@@ -688,6 +704,28 @@ export const ChildDashboard: React.FC = () => {
                 <span>{submittingTask ? 'שולח לאישור...' : 'שלח לאישור ההורים'}</span>
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {showTimeUpAlert && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-night-950/90 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-sm rounded-3xl bg-night-900 border-2 border-amber-400/70 p-7 text-center shadow-2xl shadow-amber-950/40">
+            <div className="text-6xl mb-3" aria-hidden="true">⏰</div>
+            <h3 className="text-2xl font-black text-gold-300 mb-2">הזמן נגמר!</h3>
+            <p className="text-sm text-purple-200 mb-6">
+              זמן המסך הסתיים. אפשר לעצור עכשיו ולחזור כשיהיו דקות זמינות.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                audio.playTap();
+                setShowTimeUpAlert(false);
+              }}
+              className="w-full py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 hover:from-gold-300 hover:to-amber-300 active:scale-95 transition"
+            >
+              הבנתי
+            </button>
           </div>
         </div>
       )}
