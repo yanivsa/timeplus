@@ -1,7 +1,6 @@
 const MAX_BODY_BYTES = 900000;
 const MAX_RECORDS_PER_STORE = 20000;
 const AUTO_PROFILES = new Set(['ori', 'eitan', 'ayala']);
-const REWARD_RETRY_TAIL = 300;
 
 function reply(payload, status = 200) {
   return Response.json(payload, {
@@ -80,23 +79,61 @@ function mergeSnapshots(local, remote) {
   };
 }
 
-async function creditRecentCorrectAnswers(env, profileId, snapshot) {
-  if (!env.TIMEPLUS_DB || !snapshot || !Array.isArray(snapshot.questionHistory)) return 0;
+function buildRewardCandidates(localSnapshot, remoteSnapshot, mergedSnapshot, lastHistoryIndex) {
+  const mergedHistory = Array.isArray(mergedSnapshot?.questionHistory) ? mergedSnapshot.questionHistory : [];
+  const remoteHistory = Array.isArray(remoteSnapshot?.questionHistory) ? remoteSnapshot.questionHistory : [];
+  const localHistory = Array.isArray(localSnapshot?.questionHistory) ? localSnapshot.questionHistory : [];
+
+  let cursor = Number(lastHistoryIndex ?? -1);
+  if (!Number.isInteger(cursor) || cursor < -1 || cursor >= mergedHistory.length) cursor = -1;
+
+  const remoteKeys = new Set(remoteHistory.map(record => eventKey(record, 'questionHistory')));
+  const candidates = new Map();
+
+  // Normal fast path: everything appended after the last successfully scanned index.
+  for (const record of mergedHistory.slice(cursor + 1)) {
+    if (!record || typeof record !== 'object') continue;
+    candidates.set(eventKey(record, 'questionHistory'), record);
+  }
+
+  // Safety path: catch late/offline records that merge earlier in the sorted history.
+  for (const record of localHistory) {
+    if (!record || typeof record !== 'object') continue;
+    const key = eventKey(record, 'questionHistory');
+    if (!remoteKeys.has(key)) candidates.set(key, record);
+  }
+
+  return {
+    records: [...candidates.values()],
+    newCursor: mergedHistory.length - 1,
+  };
+}
+
+async function creditPendingCorrectAnswers(env, profileId, localSnapshot, remoteSnapshot, mergedSnapshot) {
+  if (!env.TIMEPLUS_DB) return { credited: 0, scanned: 0, cursor: null };
 
   const link = await env.TIMEPLUS_DB
     .prepare(
-      'SELECT profile_key, child_id, family_id, enabled_from_ms FROM learning_profile_links WHERE profile_key = ?'
+      'SELECT profile_key, child_id, family_id, enabled_from_ms, last_history_index FROM learning_profile_links WHERE profile_key = ?'
     )
     .bind(profileId)
     .first();
 
-  if (!link) return 0;
+  if (!link) return { credited: 0, scanned: 0, cursor: null };
 
-  const recent = snapshot.questionHistory.slice(-REWARD_RETRY_TAIL);
+  const { records, newCursor } = buildRewardCandidates(
+    localSnapshot,
+    remoteSnapshot,
+    mergedSnapshot,
+    link.last_history_index
+  );
+
   let credited = 0;
 
-  for (const record of recent) {
-    if (!record || typeof record !== 'object' || record.isCorrect !== true) continue;
+  // Cursor is updated only after every candidate has been processed successfully.
+  // If any D1 operation fails, the next sync retries the same range; syncId keeps it idempotent.
+  for (const record of records) {
+    if (record.isCorrect !== true) continue;
 
     const timestamp = Number(record.timestamp || 0);
     if (!Number.isFinite(timestamp) || timestamp < Number(link.enabled_from_ms)) continue;
@@ -127,7 +164,16 @@ async function creditRecentCorrectAnswers(env, profileId, snapshot) {
     if (Number(result?.meta?.changes || 0) > 0) credited += 1;
   }
 
-  return credited;
+  if (newCursor !== Number(link.last_history_index ?? -1)) {
+    await env.TIMEPLUS_DB
+      .prepare(
+        "UPDATE learning_profile_links SET last_history_index = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE profile_key = ?"
+      )
+      .bind(newCursor, profileId)
+      .run();
+  }
+
+  return { credited, scanned: records.length, cursor: newCursor };
 }
 
 async function ensureAccount(db, profileId) {
@@ -188,6 +234,8 @@ async function handlePost(context) {
 
   if (serialized.length > MAX_BODY_BYTES) return reply({ error: 'snapshot_too_large' }, 413);
 
+  // Persist Academy first. If Time+ then fails, we return a retryable 503;
+  // the reward cursor is not advanced, so the next sync safely retries.
   await context.env.AHAVA_DB
     .prepare(
       'UPDATE ahava_sync_profiles SET snapshot_json = ?1, revision = ?2, updated_at = ?3, token_hash = ?4 WHERE profile_id = ?5'
@@ -195,17 +243,36 @@ async function handlePost(context) {
     .bind(serialized, nextRevision, Date.now(), 'passwordless:v1', profileId)
     .run();
 
+  let rewardSync = { credited: 0, scanned: 0, cursor: null };
   if (context.env.TIMEPLUS_DB) {
-    context.waitUntil(
-      creditRecentCorrectAnswers(context.env, profileId, merged)
-        .then(count => {
-          if (count > 0) console.log('timeplus academy credits', profileId, count);
-        })
-        .catch(error => console.error('timeplus academy credit failed', profileId, error?.stack || String(error)))
-    );
+    try {
+      rewardSync = await creditPendingCorrectAnswers(
+        context.env,
+        profileId,
+        body.snapshot,
+        remoteSnapshot,
+        merged
+      );
+    } catch (error) {
+      console.error('timeplus academy credit failed', profileId, error?.stack || String(error));
+      return reply(
+        {
+          error: 'timeplus_reward_sync_failed',
+          academySaved: true,
+          revision: nextRevision,
+        },
+        503
+      );
+    }
   }
 
-  return reply({ ok: true, auth: 'passwordless', revision: nextRevision, snapshot: merged });
+  return reply({
+    ok: true,
+    auth: 'passwordless',
+    revision: nextRevision,
+    snapshot: merged,
+    rewardSync,
+  });
 }
 
 const ALLOWED_ORIGINS = new Set(['https://ahava-prep.pages.dev', 'https://ahava-prep-bpb.pages.dev']);
