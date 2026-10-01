@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { AuthUser } from '../types';
 import { apiRequest, setApiToken, ApiError } from '../services/api';
+import { unregisterNativeFcmToken } from '../services/nativePush';
 
 interface AuthContextType {
   user: AuthUser | null;
@@ -73,6 +74,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
+    try {
+      await unregisterNativeFcmToken();
+    } catch {
+      // Best-effort cleanup; logout must still continue.
+    }
     try {
       await apiRequest('/api/auth/logout', { method: 'POST' });
     } catch {
