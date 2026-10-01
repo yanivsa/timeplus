@@ -7,18 +7,16 @@ function response(data, status = 200) {
   });
 }
 
-async function getProfileHistoryCount(profileKey) {
-  const row = await AHAVA_DB
-    .prepare(`SELECT json_array_length(snapshot_json, '$.questionHistory') AS history_count
-              FROM ahava_sync_profiles
-              WHERE profile_id = ?`)
+async function getProfileHistoryCount(env, profileKey) {
+  const row = await env.AHAVA_DB
+    .prepare("SELECT json_array_length(snapshot_json, '$.questionHistory') AS history_count FROM ahava_sync_profiles WHERE profile_id = ?")
     .bind(profileKey)
     .first();
   return Number(row?.history_count || 0);
 }
 
-async function readNewHistory(profileKey, lastHistoryIndex) {
-  const { results = [] } = await AHAVA_DB
+async function readNewHistory(env, profileKey, lastHistoryIndex) {
+  const { results = [] } = await env.AHAVA_DB
     .prepare(`
       SELECT
         CAST(j.key AS INTEGER) AS history_index,
@@ -40,15 +38,15 @@ async function readNewHistory(profileKey, lastHistoryIndex) {
   return results;
 }
 
-async function creditAnswer(link, item) {
+async function creditAnswer(env, link, item) {
   const syncId = String(item.sync_id || '');
   if (!syncId) return false;
 
   const timestamp = Number(item.question_timestamp_ms || 0);
   if (Number(item.is_correct) !== 1 || timestamp < Number(link.enabled_from_ms)) return false;
 
-  const transactionId = `academy:${syncId}`;
-  const result = await TIMEPLUS_DB
+  const transactionId = 'academy:' + syncId;
+  const result = await env.TIMEPLUS_DB
     .prepare(`
       INSERT OR IGNORE INTO learning_reward_credits (
         sync_id, profile_key, child_id, family_id, subject, question_id,
@@ -71,31 +69,25 @@ async function creditAnswer(link, item) {
   return Number(result?.meta?.changes || 0) === 1;
 }
 
-async function syncProfile(link) {
-  const historyCount = await getProfileHistoryCount(link.profile_key);
+async function syncProfile(env, link) {
+  const historyCount = await getProfileHistoryCount(env, link.profile_key);
   let cursor = Number(link.last_history_index ?? -1);
 
-  // If the source history was ever reset/truncated, safely rescan.
-  // sync_id is the idempotency key, so rescanning cannot double-credit.
   if (historyCount - 1 < cursor) cursor = -1;
 
-  const items = await readNewHistory(link.profile_key, cursor);
+  const items = await readNewHistory(env, link.profile_key, cursor);
   let credited = 0;
   let maxIndex = cursor;
 
   for (const item of items) {
     const idx = Number(item.history_index);
     if (Number.isFinite(idx) && idx > maxIndex) maxIndex = idx;
-    if (await creditAnswer(link, item)) credited += 1;
+    if (await creditAnswer(env, link, item)) credited += 1;
   }
 
   if (maxIndex !== Number(link.last_history_index ?? -1)) {
-    await TIMEPLUS_DB
-      .prepare(`
-        UPDATE learning_profile_links
-           SET last_history_index = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-         WHERE profile_key = ?
-      `)
+    await env.TIMEPLUS_DB
+      .prepare("UPDATE learning_profile_links SET last_history_index = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE profile_key = ?")
       .bind(maxIndex, link.profile_key)
       .run();
   }
@@ -110,20 +102,16 @@ async function syncProfile(link) {
   };
 }
 
-async function syncAll() {
-  const { results: links = [] } = await TIMEPLUS_DB
-    .prepare(`
-      SELECT profile_key, child_id, family_id, enabled_from_ms, last_history_index
-      FROM learning_profile_links
-      ORDER BY profile_key
-    `)
+async function syncAll(env) {
+  const { results: links = [] } = await env.TIMEPLUS_DB
+    .prepare("SELECT profile_key, child_id, family_id, enabled_from_ms, last_history_index FROM learning_profile_links ORDER BY profile_key")
     .all();
 
   const profiles = [];
   let credited = 0;
 
   for (const link of links) {
-    const result = await syncProfile(link);
+    const result = await syncProfile(env, link);
     profiles.push(result);
     credited += result.credited;
   }
@@ -131,26 +119,27 @@ async function syncAll() {
   return { ok: true, credited, profiles, at: new Date().toISOString() };
 }
 
-addEventListener('scheduled', event => {
-  event.waitUntil(
-    syncAll().then(result => console.log('academy-sync', JSON.stringify(result)))
-      .catch(error => console.error('academy-sync failed', error?.stack || String(error)))
-  );
-});
+export default {
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(
+      syncAll(env)
+        .then(result => console.log('academy-sync', JSON.stringify(result)))
+        .catch(error => console.error('academy-sync failed', error?.stack || String(error)))
+    );
+  },
 
-addEventListener('fetch', event => {
-  event.respondWith((async () => {
-    const url = new URL(event.request.url);
+  async fetch(request, env) {
+    const url = new URL(request.url);
     if (url.pathname === '/health') {
       return response({ ok: true, service: 'timeplus-academy-sync', at: new Date().toISOString() });
     }
     if (url.pathname === '/sync') {
       try {
-        return response(await syncAll());
+        return response(await syncAll(env));
       } catch (error) {
         return response({ ok: false, error: String(error?.message || error) }, 500);
       }
     }
     return response({ ok: true, endpoints: ['/health', '/sync'] });
-  })());
-});
+  },
+};
