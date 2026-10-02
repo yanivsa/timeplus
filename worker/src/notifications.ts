@@ -6,7 +6,7 @@ export interface SendNotificationParams {
   familyId: string;
   recipientRole: UserRole;
   recipientChildId?: string | null;
-  type: 'screen_request' | 'task_submitted' | 'screen_approved' | 'screen_rejected' | 'task_approved' | 'task_rejected' | 'manual_bonus';
+  type: 'screen_request' | 'task_submitted' | 'screen_approved' | 'screen_rejected' | 'task_approved' | 'task_rejected' | 'manual_bonus' | 'screen_time_up';
   title: string;
   message: string;
   entityType?: string;
