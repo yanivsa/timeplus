@@ -41,6 +41,7 @@ import {
   pauseScreenSession,
   resumeScreenSession,
   stopScreenSession,
+  finalizeExpiredScreenSessions,
 } from './screen-sessions';
 import { renderPrivacyPolicyHtml } from './privacy';
 import {
@@ -1376,9 +1377,29 @@ export default {
     return env.ASSETS.fetch(request);
   },
 
-  // --- 6. CRON TRIGGER (Asia/Jerusalem Daily Task Generation) ---
+  // --- 6. CRON TRIGGERS ---
+  // Every minute: close expired screen-time sessions in the cloud and push a
+  // notification even if the child's phone/app is sleeping.
+  // Daily 03:00 UTC: keep the existing recurring-task generation.
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    const familyId = env.DEFAULT_FAMILY_ID || 'yaniv_family';
-    await ensureDailyTaskInstances(env.DB, familyId);
+    const expiredSessions = await finalizeExpiredScreenSessions(env.DB);
+
+    for (const session of expiredSessions) {
+      await sendNotification(env.DB, env, {
+        familyId: session.familyId,
+        recipientRole: 'child',
+        recipientChildId: session.childId,
+        type: 'screen_time_up',
+        title: 'הזמן נגמר ⏰',
+        message: 'זמן המסך הסתיים. אפשר לחזור לאפליקציה כדי לראות את היתרה המעודכנת.',
+        entityType: 'screen_session',
+        entityId: session.id,
+      });
+    }
+
+    if (event.cron === '0 3 * * *') {
+      const familyId = env.DEFAULT_FAMILY_ID || 'yaniv_family';
+      await ensureDailyTaskInstances(env.DB, familyId);
+    }
   },
 };
