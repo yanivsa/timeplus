@@ -48,8 +48,8 @@ export const ChildDashboard: React.FC = () => {
   const [showSelfUsageModal, setShowSelfUsageModal] = useState(false);
   const [selfUsageSource, setSelfUsageSource] = useState('vr');
   const [screenSession, setScreenSession] = useState<any>({ activeSession: null, readyRequests: [] });
-  const [screenSessionLoadedAt, setScreenSessionLoadedAt] = useState(Date.now());
-  const [timerTick, setTimerTick] = useState(Date.now());
+  const [screenSessionLoadedAt, setScreenSessionLoadedAt] = useState(() => performance.now());
+  const [timerTick, setTimerTick] = useState(() => performance.now());
   const [screenSessionBusy, setScreenSessionBusy] = useState(false);
   const [showTimeUpAlert, setShowTimeUpAlert] = useState(false);
   const alertedSessionRef = useRef<string | null>(null);
@@ -67,7 +67,7 @@ export const ChildDashboard: React.FC = () => {
 
       const sessionRes = await apiRequest('/api/child/screen-session');
       setScreenSession(sessionRes || { activeSession: null, readyRequests: [] });
-      setScreenSessionLoadedAt(Date.now());
+      setScreenSessionLoadedAt(performance.now());
 
       // Check for celebration events
       const celebRes = await apiRequest(`/api/child/celebration?childId=${user?.id}`);
@@ -92,14 +92,31 @@ export const ChildDashboard: React.FC = () => {
 
   useEffect(() => {
     loadDashboard();
+
+    const syncWhenForegrounded = () => {
+      if (document.visibilityState === 'visible') {
+        loadDashboard();
+      }
+    };
+
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') loadDashboard();
     }, 60000);
-    return () => clearInterval(interval);
+
+    document.addEventListener('visibilitychange', syncWhenForegrounded);
+    window.addEventListener('focus', syncWhenForegrounded);
+    window.addEventListener('pageshow', syncWhenForegrounded);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', syncWhenForegrounded);
+      window.removeEventListener('focus', syncWhenForegrounded);
+      window.removeEventListener('pageshow', syncWhenForegrounded);
+    };
   }, [user]);
 
   useEffect(() => {
-    const interval = setInterval(() => setTimerTick(Date.now()), 1000);
+    const interval = setInterval(() => setTimerTick(performance.now()), 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -174,7 +191,7 @@ export const ChildDashboard: React.FC = () => {
         body: JSON.stringify({ source: selfUsageSource }),
       });
       setScreenSession(res);
-      setScreenSessionLoadedAt(Date.now());
+      setScreenSessionLoadedAt(performance.now());
       setShowSelfUsageModal(false);
       audio.playTap();
       setStatusMessage('הטיימר התחיל — כשתסיים לחץ "סיימתי".');
@@ -204,7 +221,7 @@ export const ChildDashboard: React.FC = () => {
         body: JSON.stringify(requestId ? { requestId } : {}),
       });
       setScreenSession(res);
-      setScreenSessionLoadedAt(Date.now());
+      setScreenSessionLoadedAt(performance.now());
       audio.playTap();
 
       if (action === 'stop' && res.mode === 'self') {
