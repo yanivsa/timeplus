@@ -386,22 +386,23 @@ export async function pauseScreenSession(db: D1Database, familyId: string, child
 
   const remaining = remainingNow(row);
   const now = new Date().toISOString();
-  const status = remaining <= 0 ? 'finished' : 'paused';
-  let spentMinutes = 0;
 
-  if (status === 'finished') {
-    const usage = await recordSelfUsage(db, row, 0);
-    spentMinutes = usage.spentMinutes;
+  if (remaining <= 0) {
+    await claimAndFinishExpiredSession(db, row);
+    return { success: true, remainingSeconds: 0, status: 'finished', spentMinutes: 0 };
   }
 
-  await db.prepare(
+  const paused = await db.prepare(
     `UPDATE screen_sessions
-     SET status=?, remaining_seconds=?, paused_at=?,
-         ended_at=CASE WHEN ?='finished' THEN ? ELSE ended_at END, updated_at=?
+     SET status='paused', remaining_seconds=?, paused_at=?, updated_at=?
      WHERE id=? AND status='running'`
-  ).bind(status, remaining, now, status, now, now, row.id).run();
+  ).bind(remaining, now, now, row.id).run();
 
-  return { success: true, remainingSeconds: remaining, status, spentMinutes };
+  if (Number((paused as any)?.meta?.changes || 0) <= 0) {
+    return { success: false, error: 'הטיימר השתנה, נסה שוב' };
+  }
+
+  return { success: true, remainingSeconds: remaining, status: 'paused', spentMinutes: 0 };
 }
 
 export async function resumeScreenSession(db: D1Database, familyId: string, childId: string) {
@@ -436,19 +437,42 @@ export async function stopScreenSession(db: D1Database, familyId: string, childI
 
   const remaining = remainingNow(row);
   const now = new Date().toISOString();
-  const usage = await recordSelfUsage(db, row, remaining);
 
-  await db.prepare(
+  // Claim the stop before billing so a simultaneous expiry sweep cannot
+  // charge the same self-reported session twice.
+  const stopped = await db.prepare(
     `UPDATE screen_sessions
      SET status='stopped', remaining_seconds=?, ended_at=?, updated_at=?
      WHERE id=? AND status IN ('running','paused')`
   ).bind(remaining, now, now, row.id).run();
 
-  return {
-    success: true,
-    remainingSeconds: remaining,
-    mode: row.mode || 'approved',
-    spentMinutes: usage.spentMinutes,
-    newBalance: usage.newBalance,
-  };
+  if (Number((stopped as any)?.meta?.changes || 0) <= 0) {
+    return { success: false, error: 'הטיימר כבר הסתיים או השתנה' };
+  }
+
+  try {
+    const usage = await recordSelfUsage(db, row, remaining);
+
+    return {
+      success: true,
+      remainingSeconds: remaining,
+      mode: row.mode || 'approved',
+      spentMinutes: usage.spentMinutes,
+      newBalance: usage.newBalance,
+    };
+  } catch (err) {
+    // Restore the previous state so the user can retry if billing/logging fails.
+    await db.prepare(
+      `UPDATE screen_sessions
+       SET status=?, remaining_seconds=?, ended_at=?, updated_at=?
+       WHERE id=? AND status='stopped'`
+    ).bind(
+      row.status,
+      row.remaining_seconds,
+      row.ended_at,
+      new Date().toISOString(),
+      row.id
+    ).run();
+    throw err;
+  }
 }
