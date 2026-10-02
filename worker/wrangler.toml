@@ -16,7 +16,7 @@ database_name = "timeplus-db"
 database_id = "6453bce5-c013-4bff-a34d-52cc4bc991d4"
 
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["* * * * *", "0 3 * * *"]
 
 [vars]
 ENVIRONMENT = "production"
