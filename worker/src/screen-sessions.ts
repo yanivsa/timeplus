@@ -123,6 +123,38 @@ async function recordSelfUsage(
   return { spentMinutes, newBalance };
 }
 
+async function claimAndFinishExpiredSession(
+  db: D1Database,
+  row: SessionRow
+): Promise<boolean> {
+  const now = new Date().toISOString();
+
+  // Claim the expiry atomically. Only the request that changes the row may
+  // charge self-reported usage, preventing duplicate deductions if the cron
+  // and a foreground refresh discover the same expiry at the same time.
+  const claimed = await db.prepare(
+    `UPDATE screen_sessions
+     SET status='finished', remaining_seconds=0, ended_at=?, updated_at=?
+     WHERE id=? AND status='running'`
+  ).bind(now, now, row.id).run();
+
+  const changes = Number((claimed as any)?.meta?.changes || 0);
+  if (changes <= 0) return false;
+
+  try {
+    await recordSelfUsage(db, row, 0);
+    return true;
+  } catch (err) {
+    // Make the expiry retryable if billing/logging unexpectedly fails.
+    await db.prepare(
+      `UPDATE screen_sessions
+       SET status='running', ended_at=NULL, updated_at=?
+       WHERE id=? AND status='finished'`
+    ).bind(new Date().toISOString(), row.id).run();
+    throw err;
+  }
+}
+
 async function normalizeExpired(
   db: D1Database,
   row: SessionRow | null
@@ -133,26 +165,59 @@ async function normalizeExpired(
   const elapsed = elapsedNow(row, remaining);
 
   if (row.status === 'running' && remaining <= 0) {
+    const finished = await claimAndFinishExpiredSession(db, row);
     const now = new Date().toISOString();
-    await recordSelfUsage(db, row, 0);
-
-    await db.prepare(
-      `UPDATE screen_sessions
-       SET status='finished', remaining_seconds=0, ended_at=?, updated_at=?
-       WHERE id=? AND status='running'`
-    ).bind(now, now, row.id).run();
 
     return {
       ...row,
       status: 'finished',
       remaining_seconds: 0,
-      ended_at: now,
+      ended_at: finished ? now : row.ended_at,
       remaining_now: 0,
       elapsed_now: row.allocated_seconds,
     };
   }
 
   return { ...row, remaining_now: remaining, elapsed_now: elapsed };
+}
+
+export type ExpiredScreenSession = {
+  id: string;
+  familyId: string;
+  childId: string;
+  source: string;
+  mode: SessionMode;
+};
+
+export async function finalizeExpiredScreenSessions(
+  db: D1Database
+): Promise<ExpiredScreenSession[]> {
+  const { results } = await db.prepare(
+    `SELECT s.*,
+       CASE WHEN r.reviewed_by=? THEN 'self' ELSE 'approved' END AS mode
+     FROM screen_sessions s
+     LEFT JOIN screen_time_requests r ON r.id=s.screen_time_request_id
+     WHERE s.status='running'`
+  ).bind(SELF_REVIEW_MARKER).all<SessionRow>();
+
+  const expired: ExpiredScreenSession[] = [];
+
+  for (const row of results || []) {
+    if (remainingNow(row) > 0) continue;
+
+    const finished = await claimAndFinishExpiredSession(db, row);
+    if (!finished) continue;
+
+    expired.push({
+      id: row.id,
+      familyId: row.family_id,
+      childId: row.child_id,
+      source: row.source,
+      mode: row.mode || 'approved',
+    });
+  }
+
+  return expired;
 }
 
 export async function getScreenSessionState(db: D1Database, familyId: string, childId: string) {
@@ -179,6 +244,7 @@ export async function getScreenSessionState(db: D1Database, familyId: string, ch
   return {
     activeSession: normalized && ['running', 'paused'].includes(normalized.status) ? normalized : null,
     readyRequests: readyRequests || [],
+    serverNowMs: Date.now(),
   };
 }
 
