@@ -1397,7 +1397,8 @@ export default {
       });
     }
 
-    if (event.cron === '0 3 * * *') {
+    const scheduledAt = new Date(event.scheduledTime);
+    if (scheduledAt.getUTCHours() === 3 && scheduledAt.getUTCMinutes() === 0) {
       const familyId = env.DEFAULT_FAMILY_ID || 'yaniv_family';
       await ensureDailyTaskInstances(env.DB, familyId);
     }
