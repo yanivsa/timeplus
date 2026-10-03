@@ -55,56 +55,61 @@ async function recordSelfUsage(
 
   // The wallet is minute-based. Any started minute counts as one minute.
   const requestedCharge = Math.max(1, Math.ceil(usedSeconds / 60));
-
-  const child = await db.prepare(
-    `SELECT available_minutes FROM children WHERE id=? AND family_id=?`
-  ).bind(row.child_id, row.family_id).first<{ available_minutes: number }>();
-
-  if (!child) return { spentMinutes: 0 };
-
-  // A child self-report can never push the wallet below zero.
-  const spentMinutes = Math.min(requestedCharge, Math.max(0, child.available_minutes));
-  if (spentMinutes <= 0) return { spentMinutes: 0, newBalance: child.available_minutes };
-
   const now = new Date().toISOString();
-  const newBalance = child.available_minutes - spentMinutes;
   const usageLogId = generateId();
+  const transactionId = generateId();
 
+  // Keep the ledger entries and wallet mutation in one D1 batch transaction.
+  // The UPDATE is deliberately last so every preceding SELECT sees the same
+  // pre-charge balance. This prevents a simultaneous reward/manual adjustment
+  // from being overwritten by a stale read-modify-write.
   await db.batch([
-    db.prepare(
-      `UPDATE children SET available_minutes=?, updated_at=? WHERE id=? AND family_id=?`
-    ).bind(newBalance, now, row.child_id, row.family_id),
     db.prepare(
       `INSERT INTO screen_usage_logs
         (id,family_id,child_id,screen_time_request_id,source,minutes,reason,created_by,created_at)
-       VALUES (?,?,?,NULL,?,?,?,'child',?)`
+       SELECT ?,?,?,NULL,?,MIN(?,MAX(0,available_minutes)),?,'child',?
+       FROM children
+       WHERE id=? AND family_id=? AND available_minutes>0`
     ).bind(
       usageLogId,
       row.family_id,
       row.child_id,
       row.source,
-      spentMinutes,
+      requestedCharge,
       'דיווח עצמי באמצעות טיימר',
-      now
+      now,
+      row.child_id,
+      row.family_id
     ),
     db.prepare(
       `INSERT INTO minute_transactions
         (id,family_id,child_id,type,amount,balance_after,reason,screen_usage_log_id,created_by,created_at)
-       VALUES (?,?,?,'spend',?,?,?,?, 'child',?)`
+       SELECT ?,?,?,'spend',
+              -MIN(?,MAX(0,available_minutes)),
+              available_minutes-MIN(?,MAX(0,available_minutes)),
+              printf('ניצול זמן עצמי: %s (%d דקות)', ?, MIN(?,MAX(0,available_minutes))),
+              ?,'child',?
+       FROM children
+       WHERE id=? AND family_id=? AND available_minutes>0`
     ).bind(
-      generateId(),
+      transactionId,
       row.family_id,
       row.child_id,
-      -spentMinutes,
-      newBalance,
-      `ניצול זמן עצמי: ${row.source} (${spentMinutes} דק')`,
+      requestedCharge,
+      requestedCharge,
+      row.source,
+      requestedCharge,
       usageLogId,
-      now
+      now,
+      row.child_id,
+      row.family_id
     ),
     db.prepare(
       `INSERT INTO audit_log
         (id,family_id,actor_type,actor_id,action,entity_type,entity_id,metadata_json,created_at)
-       VALUES (?,?,'child',?,'self_screen_usage_logged','screen_usage_log',?,?,?)`
+       SELECT ?,?,'child',?,'self_screen_usage_logged','screen_usage_log',?,?,?
+       FROM children
+       WHERE id=? AND family_id=? AND available_minutes>0`
     ).bind(
       generateId(),
       row.family_id,
@@ -113,14 +118,34 @@ async function recordSelfUsage(
       JSON.stringify({
         source: row.source,
         usedSeconds,
-        chargedMinutes: spentMinutes,
-        balanceAfter: newBalance,
+        requestedCharge,
       }),
-      now
+      now,
+      row.child_id,
+      row.family_id
     ),
+    db.prepare(
+      `UPDATE children
+       SET available_minutes=available_minutes-MIN(?,MAX(0,available_minutes)), updated_at=?
+       WHERE id=? AND family_id=? AND available_minutes>0`
+    ).bind(requestedCharge, now, row.child_id, row.family_id),
   ]);
 
-  return { spentMinutes, newBalance };
+  const transaction = await db.prepare(
+    `SELECT amount, balance_after FROM minute_transactions WHERE id=?`
+  ).bind(transactionId).first<{ amount: number; balance_after: number }>();
+
+  if (!transaction) {
+    const child = await db.prepare(
+      `SELECT available_minutes FROM children WHERE id=? AND family_id=?`
+    ).bind(row.child_id, row.family_id).first<{ available_minutes: number }>();
+    return { spentMinutes: 0, newBalance: child?.available_minutes };
+  }
+
+  return {
+    spentMinutes: Math.max(0, -Number(transaction.amount || 0)),
+    newBalance: Number(transaction.balance_after),
+  };
 }
 
 async function claimAndFinishExpiredSession(
@@ -142,6 +167,21 @@ async function claimAndFinishExpiredSession(
   if (changes <= 0) return false;
 
   try {
+    // Persist an expiry marker before billing. The minute cron uses this marker
+    // to dispatch the time-up notification even when a foreground API request
+    // (for example the parent dashboard poll) wins the race and closes first.
+    await db.prepare(
+      `INSERT INTO audit_log
+        (id,family_id,actor_type,actor_id,action,entity_type,entity_id,metadata_json,created_at)
+       VALUES (?,?,'system','screen_timer','screen_session_expired','screen_session',?,?,?)`
+    ).bind(
+      generateId(),
+      row.family_id,
+      row.id,
+      JSON.stringify({ source: row.source, mode: row.mode || 'approved' }),
+      now
+    ).run();
+
     await recordSelfUsage(db, row, 0);
     return true;
   } catch (err) {
@@ -200,24 +240,43 @@ export async function finalizeExpiredScreenSessions(
      WHERE s.status='running'`
   ).bind(SELF_REVIEW_MARKER).all<SessionRow>();
 
-  const expired: ExpiredScreenSession[] = [];
-
   for (const row of results || []) {
     if (remainingNow(row) > 0) continue;
-
-    const finished = await claimAndFinishExpiredSession(db, row);
-    if (!finished) continue;
-
-    expired.push({
-      id: row.id,
-      familyId: row.family_id,
-      childId: row.child_id,
-      source: row.source,
-      mode: row.mode || 'approved',
-    });
+    await claimAndFinishExpiredSession(db, row);
   }
 
-  return expired;
+  // Notification delivery is decoupled from who finalized the session.
+  // This closes a race where a parent/child foreground refresh could mark the
+  // timer finished a few seconds before the cron and suppress the native push.
+  const { results: pendingNotifications } = await db.prepare(
+    `SELECT DISTINCT s.id, s.family_id, s.child_id, s.source,
+       CASE WHEN r.reviewed_by=? THEN 'self' ELSE 'approved' END AS mode
+     FROM screen_sessions s
+     LEFT JOIN screen_time_requests r ON r.id=s.screen_time_request_id
+     WHERE s.status='finished'
+       AND EXISTS (
+         SELECT 1 FROM audit_log a
+         WHERE a.entity_type='screen_session'
+           AND a.entity_id=s.id
+           AND a.action='screen_session_expired'
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM notifications n
+         WHERE n.type='screen_time_up'
+           AND n.entity_type='screen_session'
+           AND n.entity_id=s.id
+       )
+     ORDER BY s.ended_at ASC
+     LIMIT 100`
+  ).bind(SELF_REVIEW_MARKER).all<SessionRow>();
+
+  return (pendingNotifications || []).map((row) => ({
+    id: row.id,
+    familyId: row.family_id,
+    childId: row.child_id,
+    source: row.source,
+    mode: row.mode || 'approved',
+  }));
 }
 
 export async function getScreenSessionState(db: D1Database, familyId: string, childId: string) {
