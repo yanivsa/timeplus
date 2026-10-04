@@ -50,4 +50,31 @@ if grep -Eq 'FATAL EXCEPTION|AndroidRuntime: FATAL|Process: com.yanivsa.timeplus
   exit 1
 fi
 
-echo 'Android runtime QA passed.'
+# Verify Firebase can mint a native FCM registration token on the Android image.
+# The token itself is never printed or uploaded.
+FCM_READY=0
+for _ in $(seq 1 30); do
+  if adb shell run-as com.yanivsa.timeplus cat shared_prefs/timeplus_push.xml 2>/dev/null | grep -q 'name="fcm_token"'; then
+    FCM_READY=1
+    break
+  fi
+  sleep 2
+done
+if [[ "$FCM_READY" != "1" ]]; then
+  echo 'Firebase Messaging did not produce a native FCM token'
+  exit 1
+fi
+
+# Simulate the two deep-link paths that native FCM notifications use.
+for TARGET_PATH in /child /parent; do
+  adb shell am start -W -n com.yanivsa.timeplus/.MainActivity --es notification_url "$TARGET_PATH" >/dev/null
+  sleep 5
+  APP_PID="$(adb shell pidof com.yanivsa.timeplus | tr -d '\r')"
+  adb forward --remove tcp:9222 >/dev/null 2>&1 || true
+  adb forward tcp:9222 "localabstract:webview_devtools_remote_$APP_PID" >/dev/null
+  OUT_FILE="runtime-devtools-$(echo "$TARGET_PATH" | tr -d '/').json"
+  curl --fail --silent --show-error http://127.0.0.1:9222/json > "$OUT_FILE"
+  grep -q "https://timeplus-app.pages.dev$TARGET_PATH" "$OUT_FILE"
+done
+
+echo 'Android runtime QA passed, including native FCM token acquisition and notification deep-link routing.'
