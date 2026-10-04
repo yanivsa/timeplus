@@ -1,0 +1,62 @@
+name: Pages Migration Smoke
+
+on:
+  push:
+    branches:
+      - migration/pages-origin-v1.0.3
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'web/**'
+      - 'android/**'
+      - '.github/workflows/pages-smoke.yml'
+
+jobs:
+  smoke:
+    name: Pages + Worker service-binding smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for Pages deployment
+        run: sleep 20
+
+      - name: Check frontend
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 8 --retry-delay 5 \
+            https://timeplus-app.pages.dev/ \
+            | grep -q '<div id="root">'
+
+      - name: Check health through Pages service binding
+        run: |
+          set -euo pipefail
+          BODY="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/healthz)"
+          echo "$BODY"
+          echo "$BODY" | grep -q '"status":"ok"'
+          echo "$BODY" | grep -q '"app":"Time+"'
+
+      - name: Check API version through Pages service binding
+        run: |
+          set -euo pipefail
+          BODY="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/api/version)"
+          echo "$BODY"
+          echo "$BODY" | grep -q '"apiVersion"'
+
+      - name: Check setup status through Pages service binding
+        run: |
+          set -euo pipefail
+          BODY="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/api/setup/status)"
+          echo "$BODY"
+          echo "$BODY" | grep -q '"initialized":'
+
+      - name: Check auth cookie headers survive Pages proxy
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            -X POST \
+            -D /tmp/timeplus-headers.txt \
+            -o /tmp/timeplus-logout.json \
+            https://timeplus-app.pages.dev/api/auth/logout
+          cat /tmp/timeplus-logout.json
+          grep -qi '^set-cookie: timeplus_session=' /tmp/timeplus-headers.txt
+          grep -q '"success":true' /tmp/timeplus-logout.json

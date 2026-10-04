@@ -1,3 +1,5 @@
+> **DEPRECATED FOR THE CURRENT UPDATE:** This document describes the original 1.0.0 release. For the current Time+ 1.0.3 update, use `release-play/PLAY_CONSOLE_UPDATE_1.0.3_FOR_MUSE.md` only. Do not upload the old 1.0.0 bundle or create a new Play app.
+
 # מדריך העלאה והפצה ל-Google Play Console (עבור Muse / יניב)
 # Step-by-Step Google Play Console Guide for Time+
 
