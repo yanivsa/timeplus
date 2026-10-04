@@ -50,4 +50,5 @@ jobs:
             runtime-window.xml
             runtime-activity.txt
             runtime-logcat.txt
+            runtime-devtools.json
           if-no-files-found: warn
