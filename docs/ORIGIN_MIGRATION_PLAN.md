@@ -5,7 +5,7 @@ Remove the Android app's hard dependency on `timeplus.yanivsa.workers.dev` witho
 
 ## Architecture
 - Existing production Worker `timeplus`: unchanged; remains the API, D1 owner, cron/timer engine and legacy web origin.
-- New Cloudflare Pages frontend: serves the React app from a stable `pages.dev` origin.
+- New Cloudflare Pages frontend: serves the React app at `https://timeplus-app.pages.dev`.
 - Pages Function: proxies `/api/*`, `/healthz` and `/privacy` to the existing Worker through a Cloudflare Service Binding named `TIMEPLUS_API`.
 - Android 1.0.3: primary origin = Pages; automatic fallback = the existing Workers origin.
 - Current installed Android 1.0.2: remains untouched until 1.0.3 passes QA.
@@ -34,3 +34,10 @@ Remove the Android app's hard dependency on `timeplus.yanivsa.workers.dev` witho
 
 ## Rollback
 Do not remove the existing Worker. If Pages has an incident, Android 1.0.3 falls back to the legacy Worker. Android 1.0.2 continues using the legacy Worker exactly as before.
+
+
+## Provisioned migration resources
+- Pages project: `timeplus-app`
+- Production URL: `https://timeplus-app.pages.dev`
+- Service binding: `TIMEPLUS_API -> timeplus`
+- Migration branch: `migration/pages-origin-v1.0.3`
