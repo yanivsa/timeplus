@@ -22,17 +22,27 @@ adb logcat -d > runtime-logcat.txt
 
 grep -q 'com.yanivsa.timeplus/.MainActivity' runtime-activity.txt
 
-if [[ -f runtime-window.xml ]]; then
-  if grep -Eq 'ERR_NAME_NOT_RESOLVED|Webpage not available' runtime-window.xml; then
-    echo 'Chromium network error page detected'
-    exit 1
-  fi
+# UIAutomator can expose a WebView as one opaque node. Since debug builds enable
+# WebView debugging, use the DevTools socket to verify the real loaded origin.
+APP_PID="$(adb shell pidof com.yanivsa.timeplus | tr -d '\r')"
+if [[ -z "$APP_PID" ]]; then
+  echo 'Time+ process is not running'
+  exit 1
+fi
 
-  if ! grep -Eq 'Time\+|אקדמיית הזמן|ילדים|הורים' runtime-window.xml; then
-    echo 'Expected Time+ login UI was not visible'
-    cat runtime-window.xml
-    exit 1
-  fi
+adb forward tcp:9222 "localabstract:webview_devtools_remote_$APP_PID"
+sleep 2
+curl --fail --silent --show-error http://127.0.0.1:9222/json > runtime-devtools.json
+
+if ! grep -q 'timeplus-app.pages.dev' runtime-devtools.json; then
+  echo 'Primary Pages origin was not loaded in the WebView'
+  cat runtime-devtools.json
+  exit 1
+fi
+
+if [[ -f runtime-window.xml ]] && grep -Eq 'ERR_NAME_NOT_RESOLVED|Webpage not available' runtime-window.xml; then
+  echo 'Chromium network error page detected'
+  exit 1
 fi
 
 if grep -Eq 'FATAL EXCEPTION|AndroidRuntime: FATAL|Process: com.yanivsa.timeplus.*FATAL' runtime-logcat.txt; then
