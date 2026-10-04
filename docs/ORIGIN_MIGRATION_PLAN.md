@@ -18,7 +18,7 @@ Remove the Android app's hard dependency on `timeplus.yanivsa.workers.dev` witho
 5. APK version is bumped only on the migration branch.
 6. The new APK accepts both the Pages and legacy Worker hostnames.
 7. Main-frame load errors on Pages automatically retry the same path on the legacy Worker.
-8. Production cutover happens only after web/API/auth/timer/FCM QA succeeds.
+8. Full Play rollout happens only after web/API/auth/origin/FCM QA succeeds. Timer QA remains separate unless timer code is changed by this release.
 
 ## QA gate
 - Pages root loads.
@@ -41,3 +41,10 @@ Do not remove the existing Worker. If Pages has an incident, Android 1.0.3 falls
 - Production URL: `https://timeplus-app.pages.dev`
 - Service binding: `TIMEPLUS_API -> timeplus`
 - Migration branch: `migration/pages-origin-v1.0.3`
+
+
+## Full rollout policy
+- No one-device canary stage is required for this rollout.
+- Complete all automated, emulator, release-signing, origin, auth/session, FCM registration, notification delivery, notification tap/deep-link, fallback, and upgrade/install QA before store upload.
+- After every gate passes, publish Android 1.0.3 (versionCode 4) to 100% of the audience on the app's current Google Play track in one rollout.
+- Do not create a new app or package; update com.yanivsa.timeplus.
