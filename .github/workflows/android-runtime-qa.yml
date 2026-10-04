@@ -51,4 +51,6 @@ jobs:
             runtime-activity.txt
             runtime-logcat.txt
             runtime-devtools.json
+            runtime-devtools-child.json
+            runtime-devtools-parent.json
           if-no-files-found: warn
