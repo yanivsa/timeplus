@@ -1,0 +1,106 @@
+name: Build Signed Play AAB
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-play-aab:
+    name: Build signed Time+ 1.0.3 AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Verify required signing secrets exist
+        env:
+          KEYSTORE_B64: ${{ secrets.TIMEPLUS_UPLOAD_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.TIMEPLUS_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TIMEPLUS_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TIMEPLUS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_B64" || { echo "Missing TIMEPLUS_UPLOAD_KEYSTORE_B64"; exit 1; }
+          test -n "$KEYSTORE_PASSWORD" || { echo "Missing TIMEPLUS_KEYSTORE_PASSWORD"; exit 1; }
+          test -n "$KEY_ALIAS" || { echo "Missing TIMEPLUS_KEY_ALIAS"; exit 1; }
+          test -n "$KEY_PASSWORD" || { echo "Missing TIMEPLUS_KEY_PASSWORD"; exit 1; }
+
+      - name: Materialize upload keystore securely
+        env:
+          KEYSTORE_B64: ${{ secrets.TIMEPLUS_UPLOAD_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.TIMEPLUS_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TIMEPLUS_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TIMEPLUS_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p android/keystores
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > android/keystores/timeplus-upload-key.jks
+          chmod 600 android/keystores/timeplus-upload-key.jks
+          cat > android/keystores/keystore.properties <<EOF
+          KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD
+          KEY_ALIAS=$KEY_ALIAS
+          KEY_PASSWORD=$KEY_PASSWORD
+          EOF
+          chmod 600 android/keystores/keystore.properties
+
+      - name: Verify release identity
+        run: |
+          set -euo pipefail
+          grep -q 'applicationId "com.yanivsa.timeplus"' android/app/build.gradle
+          grep -q 'versionCode 4' android/app/build.gradle
+          grep -q 'versionName "1.0.3"' android/app/build.gradle
+          grep -q 'PRIMARY_URL = "https://timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+
+      - name: Export upload certificate
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.TIMEPLUS_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TIMEPLUS_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          keytool -export -rfc             -keystore android/keystores/timeplus-upload-key.jks             -storepass "$KEYSTORE_PASSWORD"             -alias "$KEY_ALIAS"             -file upload_certificate.pem
+          keytool -list -v             -keystore android/keystores/timeplus-upload-key.jks             -storepass "$KEYSTORE_PASSWORD"             -alias "$KEY_ALIAS"             | grep -E 'Alias name:|SHA256:' || true
+
+      - name: Build signed release bundle
+        run: |
+          chmod +x android/gradlew
+          android/gradlew -p android clean lintRelease testReleaseUnitTest bundleRelease --no-daemon
+
+      - name: Verify AAB is signed
+        run: |
+          set -euo pipefail
+          AAB=android/app/build/outputs/bundle/release/app-release.aab
+          test -f "$AAB"
+          jarsigner -verify -verbose -certs "$AAB"
+          sha256sum "$AAB" | tee timeplus-v1.0.3-release.aab.sha256
+          cp "$AAB" timeplus-v1.0.3-release.aab
+
+      - name: Upload signed Play release package
+        uses: actions/upload-artifact@v4
+        with:
+          name: timeplus-v1.0.3-signed-play-package
+          path: |
+            timeplus-v1.0.3-release.aab
+            timeplus-v1.0.3-release.aab.sha256
+            upload_certificate.pem
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          rm -f android/keystores/timeplus-upload-key.jks
+          rm -f android/keystores/keystore.properties
