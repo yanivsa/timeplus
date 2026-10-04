@@ -1,0 +1,85 @@
+name: Android Runtime QA
+
+on:
+  push:
+    branches:
+      - migration/pages-origin-v1.0.3
+  workflow_dispatch:
+
+jobs:
+  android-runtime:
+    name: Android WebView runtime smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Android emulator smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            cd android
+            ./gradlew assembleDebug --no-daemon
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c
+            adb shell am start -W -n com.yanivsa.timeplus/.MainActivity
+            sleep 20
+
+            adb shell dumpsys activity activities > ../runtime-activity.txt
+            adb shell uiautomator dump /sdcard/timeplus-window.xml || true
+            adb pull /sdcard/timeplus-window.xml ../runtime-window.xml || true
+            adb exec-out screencap -p > ../runtime-screen.png
+            adb logcat -d > ../runtime-logcat.txt
+
+            grep -q 'com.yanivsa.timeplus/.MainActivity' ../runtime-activity.txt
+
+            if [ -f ../runtime-window.xml ]; then
+              if grep -Eq 'ERR_NAME_NOT_RESOLVED|Webpage not available' ../runtime-window.xml; then
+                echo 'Chromium network error page detected'
+                exit 1
+              fi
+              if ! grep -Eq 'Time\+|אקדמיית הזמן|ילדים|הורים' ../runtime-window.xml; then
+                echo 'Expected Time+ login UI was not visible'
+                cat ../runtime-window.xml
+                exit 1
+              fi
+            fi
+
+            if grep -Eq 'FATAL EXCEPTION|AndroidRuntime: FATAL|Process: com.yanivsa.timeplus.*FATAL' ../runtime-logcat.txt; then
+              echo 'Fatal Android runtime error detected'
+              exit 1
+            fi
+
+      - name: Upload runtime QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-runtime-qa
+          path: |
+            runtime-screen.png
+            runtime-window.xml
+            runtime-activity.txt
+            runtime-logcat.txt
+          if-no-files-found: warn
