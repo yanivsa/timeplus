@@ -20,6 +20,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -125,7 +126,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.2"
+        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.3"
         webView.addJavascriptInterface(NativePushBridge(this), "TimePlusAndroid")
 
         val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -173,15 +174,21 @@ class MainActivity : AppCompatActivity() {
             ) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
-                    mainFrameFailed = true
-                    val failedUrl = request.url.toString()
-                    if (!fallbackAttempted && failedUrl.startsWith(PRIMARY_URL)) {
-                        fallbackAttempted = true
-                        activeBaseUrl = FALLBACK_URL
-                        view?.post { view.loadUrl(buildUrl(activeBaseUrl, currentPath)) }
-                    } else {
-                        showOfflineView()
-                    }
+                    handleMainFrameFailure(view, request.url.toString())
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                if (
+                    request?.isForMainFrame == true &&
+                    (errorResponse?.statusCode ?: 0) >= 500
+                ) {
+                    handleMainFrameFailure(view, request.url.toString())
                 }
             }
         }
@@ -248,6 +255,17 @@ class MainActivity : AppCompatActivity() {
             } else {
                 showOfflineView()
             }
+        }
+    }
+
+    private fun handleMainFrameFailure(view: WebView?, failedUrl: String) {
+        mainFrameFailed = true
+        if (!fallbackAttempted && failedUrl.startsWith(PRIMARY_URL)) {
+            fallbackAttempted = true
+            activeBaseUrl = FALLBACK_URL
+            view?.post { view.loadUrl(buildUrl(activeBaseUrl, currentPath)) }
+        } else {
+            showOfflineView()
         }
     }
 
