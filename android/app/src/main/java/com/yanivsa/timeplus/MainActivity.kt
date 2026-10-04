@@ -56,6 +56,7 @@ class MainActivity : AppCompatActivity() {
     private var activeBaseUrl = PRIMARY_URL
     private var currentPath = "/"
     private var fallbackAttempted = false
+    private var mainFrameFailed = false
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -151,6 +152,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 super.onPageStarted(view, url, favicon)
+                mainFrameFailed = false
                 progressBar.visibility = View.VISIBLE
             }
 
@@ -158,8 +160,10 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 progressBar.visibility = View.GONE
                 swipeRefreshLayout.isRefreshing = false
-                showWebView()
-                notifyWebOfFcmToken()
+                if (!mainFrameFailed) {
+                    showWebView()
+                    notifyWebOfFcmToken()
+                }
             }
 
             override fun onReceivedError(
@@ -169,6 +173,7 @@ class MainActivity : AppCompatActivity() {
             ) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
+                    mainFrameFailed = true
                     val failedUrl = request.url.toString()
                     if (!fallbackAttempted && failedUrl.startsWith(PRIMARY_URL)) {
                         fallbackAttempted = true
