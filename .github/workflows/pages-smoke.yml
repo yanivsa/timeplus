@@ -48,3 +48,15 @@ jobs:
           BODY="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/api/setup/status)"
           echo "$BODY"
           echo "$BODY" | grep -q '"initialized":'
+
+      - name: Check auth cookie headers survive Pages proxy
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            -X POST \
+            -D /tmp/timeplus-headers.txt \
+            -o /tmp/timeplus-logout.json \
+            https://timeplus-app.pages.dev/api/auth/logout
+          cat /tmp/timeplus-logout.json
+          grep -qi '^set-cookie: timeplus_session=' /tmp/timeplus-headers.txt
+          grep -q '"success":true' /tmp/timeplus-logout.json
