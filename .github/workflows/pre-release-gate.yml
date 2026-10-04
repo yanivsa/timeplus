@@ -1,0 +1,126 @@
+name: Pre-Release Gate
+
+on:
+  push:
+    branches:
+      - migration/pages-origin-v1.0.3
+  workflow_dispatch:
+
+jobs:
+  release-gate:
+    name: Time+ 1.0.3 pre-release gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Build web frontend
+        run: npm run build:web
+
+      - name: Typecheck Worker
+        run: npx tsc --noEmit -p worker/tsconfig.json
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Verify immutable Android release identity
+        run: |
+          set -euo pipefail
+          grep -q 'applicationId "com.yanivsa.timeplus"' android/app/build.gradle
+          grep -q 'versionCode 4' android/app/build.gradle
+          grep -q 'versionName "1.0.3"' android/app/build.gradle
+          grep -q '"package_name": "com.yanivsa.timeplus"' android/app/google-services.json
+          grep -q '"project_id": "timeplus-e2f2f"' android/app/google-services.json
+          grep -q 'android.permission.POST_NOTIFICATIONS' android/app/src/main/AndroidManifest.xml
+          grep -q 'TimePlusFirebaseMessagingService' android/app/src/main/AndroidManifest.xml
+
+      - name: Verify resilient origin configuration
+        run: |
+          set -euo pipefail
+          grep -q 'PRIMARY_URL = "https://timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q '"timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q '"timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'TimePlusApp/1.0.3' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+
+      - name: Verify native notification plumbing
+        run: |
+          set -euo pipefail
+          grep -q 'putExtra("notification_url", targetUrl)' android/app/src/main/java/com/yanivsa/timeplus/TimePlusFirebaseMessagingService.kt
+          grep -q 'remoteMessage.data\["url"\]' android/app/src/main/java/com/yanivsa/timeplus/TimePlusFirebaseMessagingService.kt
+          grep -q 'sourceIntent?.getStringExtra("notification_url")' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'sourceIntent?.getStringExtra("url")' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q '/api/push/fcm-subscribe' web/src/services/nativePush.ts
+          grep -q "window.addEventListener('timeplus:fcm-token'" web/src/App.tsx
+          grep -q "pathname === '/api/push/fcm-subscribe'" worker/src/index.ts
+          grep -q "url: recipientRole === 'parent' ? '/parent' : '/child'" worker/src/notifications.ts
+
+      - name: Android lint, tests and release build
+        run: |
+          chmod +x android/gradlew
+          android/gradlew -p android lintRelease testReleaseUnitTest bundleRelease assembleRelease --no-daemon
+
+      - name: Verify release artifacts exist
+        run: |
+          set -euo pipefail
+          test -f android/app/build/outputs/bundle/release/app-release.aab
+          test -f android/app/build/outputs/apk/release/app-release-unsigned.apk || test -f android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Verify Pages deep links and public assets
+        run: |
+          set -euo pipefail
+          for PATHNAME in / /parent /child; do
+            BODY="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 "https://timeplus-app.pages.dev$PATHNAME")"
+            echo "$BODY" | grep -q '<div id="root">'
+          done
+          curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/sw.js | grep -q 'notificationclick'
+          curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/manifest.json | grep -q '"name"'
+
+      - name: Verify Pages to Worker API bridge
+        run: |
+          set -euo pipefail
+          HEALTH="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/healthz)"
+          echo "$HEALTH" | grep -q '"status":"ok"'
+          VERSION="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/api/version)"
+          echo "$VERSION" | grep -q '"apiVersion"'
+          SETUP="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/api/setup/status)"
+          echo "$SETUP" | grep -q '"initialized":'
+          VAPID="$(curl --fail --silent --show-error --retry 8 --retry-delay 5 https://timeplus-app.pages.dev/api/push/vapid-public-key)"
+          echo "$VAPID" | grep -q '"publicKey"'
+
+      - name: Verify FCM subscribe stays authenticated
+        run: |
+          set -euo pipefail
+          STATUS="$(curl --silent --output /tmp/fcm.json --write-out '%{http_code}' \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            --data '{"token":"qa-token-that-is-long-enough-for-validation"}' \
+            https://timeplus-app.pages.dev/api/push/fcm-subscribe)"
+          cat /tmp/fcm.json
+          test "$STATUS" = "401"
+
+      - name: Upload unsigned QA release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: timeplus-1.0.3-pre-release
+          path: |
+            android/app/build/outputs/bundle/release/app-release.aab
+            android/app/build/outputs/apk/release/*.apk
+            android/app/build/reports/lint-results-release.html
+          if-no-files-found: error
