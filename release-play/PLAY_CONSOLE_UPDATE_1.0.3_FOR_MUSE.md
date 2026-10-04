@@ -99,3 +99,12 @@ Return:
 6. confirmation rollout is 100% on that track,
 7. any Play Console warning/error verbatim,
 8. final status: RELEASED or BLOCKED.
+
+
+## Post-merge source of truth
+- PR #11 is merged.
+- Build the store release from the latest `main` branch only.
+- Cloudflare Pages production branch is `main`.
+- Before uploading, compare the release signing/upload certificate with the existing Time+ upload certificate. The documented SHA-256 fingerprint is:
+  `95:BA:F5:D7:A1:38:B6:B2:D8:F0:56:69:56:29:2B:C6:5E:D3:62:E0:08:9A:F1:6E:37:91:9D:F1:66:1D:9C:DA`
+- If the fingerprint differs, STOP and do not upload.
