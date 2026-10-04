@@ -38,8 +38,12 @@ import org.json.JSONObject
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        const val PRODUCTION_URL = "https://timeplus.yanivsa.workers.dev"
-        const val ALLOWED_HOST = "timeplus.yanivsa.workers.dev"
+        const val PRIMARY_URL = "https://timeplus-app.pages.dev"
+        const val FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"
+        private val ALLOWED_HOSTS = setOf(
+            "timeplus-app.pages.dev",
+            "timeplus.yanivsa.workers.dev"
+        )
     }
 
     private lateinit var webView: WebView
@@ -49,6 +53,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var retryButton: Button
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var activeBaseUrl = PRIMARY_URL
+    private var currentPath = "/"
+    private var fallbackAttempted = false
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -94,7 +101,8 @@ class MainActivity : AppCompatActivity() {
 
         if (isNetworkAvailable()) {
             showWebView()
-            webView.loadUrl(targetUrlFromIntent(intent))
+            currentPath = targetPathFromIntent(intent)
+            loadCurrentPath(preferPrimary = true)
         } else {
             showOfflineView()
         }
@@ -127,7 +135,7 @@ class MainActivity : AppCompatActivity() {
                 val uri = request?.url ?: return false
                 val host = uri.host
 
-                if (host != null && host.equals(ALLOWED_HOST, ignoreCase = true)) {
+                if (host != null && ALLOWED_HOSTS.any { it.equals(host, ignoreCase = true) }) {
                     return false // Let WebView load it
                 }
 
@@ -161,7 +169,14 @@ class MainActivity : AppCompatActivity() {
             ) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
-                    showOfflineView()
+                    val failedUrl = request.url.toString()
+                    if (!fallbackAttempted && failedUrl.startsWith(PRIMARY_URL)) {
+                        fallbackAttempted = true
+                        activeBaseUrl = FALLBACK_URL
+                        view?.post { view.loadUrl(buildUrl(activeBaseUrl, currentPath)) }
+                    } else {
+                        showOfflineView()
+                    }
                 }
             }
         }
@@ -224,7 +239,7 @@ class MainActivity : AppCompatActivity() {
         retryButton.setOnClickListener {
             if (isNetworkAvailable()) {
                 showWebView()
-                webView.loadUrl(PRODUCTION_URL)
+                loadCurrentPath(preferPrimary = true)
             } else {
                 showOfflineView()
             }
@@ -260,7 +275,8 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (::webView.isInitialized && isNetworkAvailable()) {
-            webView.loadUrl(targetUrlFromIntent(intent))
+            currentPath = targetPathFromIntent(intent)
+            loadCurrentPath(preferPrimary = false)
         }
     }
 
@@ -322,13 +338,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun targetUrlFromIntent(sourceIntent: Intent?): String {
+    private fun targetPathFromIntent(sourceIntent: Intent?): String {
         val path = (
             sourceIntent?.getStringExtra("notification_url")
                 ?: sourceIntent?.getStringExtra("url")
         )?.trim().orEmpty()
-        if (path.isBlank() || !path.startsWith("/")) return PRODUCTION_URL
-        return PRODUCTION_URL + path
+        if (path.isBlank() || !path.startsWith("/")) return "/"
+        return path
+    }
+
+    private fun buildUrl(baseUrl: String, path: String): String {
+        return if (path == "/") baseUrl else baseUrl + path
+    }
+
+    private fun loadCurrentPath(preferPrimary: Boolean) {
+        if (preferPrimary) {
+            activeBaseUrl = PRIMARY_URL
+            fallbackAttempted = false
+        }
+        webView.loadUrl(buildUrl(activeBaseUrl, currentPath))
     }
 
     private class NativePushBridge(private val context: Context) {
