@@ -60,9 +60,15 @@ async function runAll() {
   let eitanCookie = '';
   let uriId = '';
   let eitanId = '';
-  const TEST_PARENT_PIN = '8899';
-  const TEST_URI_PIN = '1122';
-  const TEST_EITAN_PIN = '3344';
+  const TEST_PARENT_PIN = process.env.TEST_PARENT_PIN;
+  const TEST_URI_PIN = process.env.TEST_URI_PIN;
+  const TEST_EITAN_PIN = process.env.TEST_EITAN_PIN;
+
+  if (!TEST_PARENT_PIN || !TEST_URI_PIN || !TEST_EITAN_PIN) {
+    throw new Error(
+      'Missing test credentials. Set TEST_PARENT_PIN, TEST_URI_PIN and TEST_EITAN_PIN in the test environment.'
+    );
+  }
 
   // --- HEALTH & VERSION ---
   await runTest('SYSTEM', 'GET /healthz returns ok with Asia/Jerusalem timezone', async () => {
