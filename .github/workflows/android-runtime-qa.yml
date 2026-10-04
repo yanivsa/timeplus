@@ -39,10 +39,9 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
-            set -eu
-            cd android
-            ./gradlew assembleDebug --no-daemon
-            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            chmod +x android/gradlew
+            android/gradlew -p android assembleDebug --no-daemon
+            adb install -r android/app/build/outputs/apk/debug/app-debug.apk
             adb logcat -c
             adb shell am start -W -n com.yanivsa.timeplus/.MainActivity
             sleep 20
