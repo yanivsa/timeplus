@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - migration/pages-origin-v1.0.3
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
