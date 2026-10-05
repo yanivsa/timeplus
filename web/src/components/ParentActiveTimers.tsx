@@ -203,11 +203,14 @@ export const ParentActiveTimers: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="text-left shrink-0 min-w-[92px]">
+                <div
+                  className="text-left shrink-0 min-w-[92px]"
+                  aria-label={`נותרו ${formatDuration(remaining)}, נוצלו ${formatDuration(elapsed)}`}
+                >
                   <div className="font-mono text-2xl font-black tracking-tight text-cyan-200 tabular-nums" aria-hidden="true">
                     {formatDuration(remaining)}
                   </div>
-                  <div className="flex justify-between gap-2 text-[9px] text-purple-400 font-semibold">
+                  <div className="flex justify-between gap-2 text-[9px] text-purple-400 font-semibold" aria-hidden="true">
                     <span>נותר</span>
                     <span>נוצל {formatDuration(elapsed)}</span>
                   </div>
