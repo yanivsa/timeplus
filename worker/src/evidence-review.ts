@@ -18,25 +18,41 @@ export async function handleEvidenceReviewRequest(
   request: Request,
   env: Env
 ): Promise<Response | null> {
+  if (request.method.toUpperCase() !== 'POST') return null;
+
   const url = new URL(request.url);
-  const match = url.pathname.match(/^\/api\/parent\/evidence\/([^/]+)\/approve$/);
-  if (!match || request.method.toUpperCase() !== 'POST') return null;
+  const evidenceMatch = url.pathname.match(/^\/api\/parent\/evidence\/([^/]+)\/approve$/);
+  const taskMatch = url.pathname.match(/^\/api\/parent\/tasks\/([^/]+)\/approve$/);
+  if (!evidenceMatch && !taskMatch) return null;
 
   const user = await getSessionUser(request, env.DB);
   if (!user) return errorJson('נדרשת התחברות למערכת', 401);
   if (user.role !== 'parent') return errorJson('פעולה זו מורשית להורים בלבד', 403);
 
-  const submissionId = match[1];
-  const submission = await env.DB
-    .prepare(
-      `SELECT ts.id, ts.task_instance_id, ts.status, ti.family_id, ti.child_id, ti.title
-       FROM task_submissions ts
-       JOIN task_instances ti ON ti.id = ts.task_instance_id
-       WHERE ts.id = ? AND ti.family_id = ? AND ts.media_kind IS NOT NULL`
-    )
-    .bind(submissionId, user.familyId)
-    .first<any>();
+  const submission = evidenceMatch
+    ? await env.DB
+        .prepare(
+          `SELECT ts.id, ts.task_instance_id, ts.status, ti.family_id, ti.child_id, ti.title
+           FROM task_submissions ts
+           JOIN task_instances ti ON ti.id = ts.task_instance_id
+           WHERE ts.id = ? AND ti.family_id = ? AND ts.media_kind IS NOT NULL`
+        )
+        .bind(evidenceMatch[1], user.familyId)
+        .first<any>()
+    : await env.DB
+        .prepare(
+          `SELECT ts.id, ts.task_instance_id, ts.status, ti.family_id, ti.child_id, ti.title
+           FROM task_submissions ts
+           JOIN task_instances ti ON ti.id = ts.task_instance_id
+           WHERE ts.task_instance_id = ? AND ti.family_id = ?
+             AND ts.media_kind IS NOT NULL AND ts.status = 'pending'
+           ORDER BY ts.submitted_at DESC LIMIT 1`
+        )
+        .bind(taskMatch![1], user.familyId)
+        .first<any>();
 
+  // Existing non-evidence task approvals must keep flowing untouched to the base worker.
+  if (!submission && taskMatch) return null;
   if (!submission) return errorJson('הגשת הראיה לא נמצאה', 404);
 
   const body = (await request.json().catch(() => ({}))) as any;
@@ -51,7 +67,7 @@ export async function handleEvidenceReviewRequest(
        SET verification_status = 'verified', review_mode = 'parent', reviewed_at = ?
        WHERE id = ?`
     )
-    .bind(now, submissionId)
+    .bind(now, submission.id)
     .run();
 
   if ((result.minutesAwarded || 0) > 0) {
@@ -65,7 +81,7 @@ export async function handleEvidenceReviewRequest(
            ORDER BY created_at DESC LIMIT 1
          )`
       )
-      .bind(submissionId, submission.task_instance_id)
+      .bind(submission.id, submission.task_instance_id)
       .run();
   }
 
@@ -78,7 +94,7 @@ export async function handleEvidenceReviewRequest(
     .bind(
       generateId(),
       user.familyId,
-      submissionId,
+      submission.id,
       JSON.stringify({
         taskInstanceId: submission.task_instance_id,
         minutesAwarded: result.minutesAwarded || 0,
