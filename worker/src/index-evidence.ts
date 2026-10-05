@@ -1,11 +1,16 @@
 import baseWorker from './index';
 import { cleanupExpiredEvidence, handleEvidenceRequest } from './evidence';
+import { handleEvidenceReviewRequest } from './evidence-review';
 import { Env } from './types';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const reviewResponse = await handleEvidenceReviewRequest(request, env);
+    if (reviewResponse) return reviewResponse;
+
     const evidenceResponse = await handleEvidenceRequest(request, env, ctx);
     if (evidenceResponse) return evidenceResponse;
+
     return (baseWorker.fetch as any)(request, env, ctx);
   },
 
