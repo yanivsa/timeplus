@@ -1,0 +1,4 @@
+# Pages uses _redirects for SPA fallback, but Workers Static Assets has
+# not_found_handling = "single-page-application" already. Parsing the Pages
+# catch-all rule in the Worker would create an infinite rewrite loop.
+_redirects
