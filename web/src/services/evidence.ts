@@ -48,8 +48,8 @@ export async function normalizeEvidenceImage(file: File, maxEdge = 1600): Promis
   if (!file.type.startsWith('image/')) throw new Error('יש לבחור תמונה תקינה');
 
   const source = await loadImage(file);
-  const sourceWidth = 'width' in source ? source.width : source.width;
-  const sourceHeight = 'height' in source ? source.height : source.height;
+  const sourceWidth = source.width;
+  const sourceHeight = source.height;
   if (!sourceWidth || !sourceHeight) throw new Error('לא ניתן לקרוא את ממדי התמונה');
 
   const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
