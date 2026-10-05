@@ -3,6 +3,7 @@ import { useAuth } from './context/AuthContext';
 import { BackgroundStars } from './components/BackgroundStars';
 import { OfflineBanner } from './components/OfflineBanner';
 import { VersionFooter } from './components/VersionFooter';
+import { ParentActiveTimers } from './components/ParentActiveTimers';
 import { LoginScreen } from './screens/LoginScreen';
 import { SetupScreen } from './screens/SetupScreen';
 import { ChildDashboard } from './screens/ChildDashboard';
@@ -37,7 +38,6 @@ export const App: React.FC = () => {
     };
   }, [user?.id, user?.role]);
 
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
@@ -65,7 +65,10 @@ export const App: React.FC = () => {
         ) : !user ? (
           <LoginScreen />
         ) : user.role === 'parent' ? (
-          <ParentDashboard />
+          <>
+            <ParentActiveTimers />
+            <ParentDashboard />
+          </>
         ) : (
           <ChildDashboard />
         )}
