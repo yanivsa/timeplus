@@ -4,6 +4,8 @@ import { BackgroundStars } from './components/BackgroundStars';
 import { OfflineBanner } from './components/OfflineBanner';
 import { VersionFooter } from './components/VersionFooter';
 import { ParentActiveTimers } from './components/ParentActiveTimers';
+import { ChildEvidencePanel } from './components/ChildEvidencePanel';
+import { EvidenceJournalPanel } from './components/EvidenceJournalPanel';
 import { LoginScreen } from './screens/LoginScreen';
 import { SetupScreen } from './screens/SetupScreen';
 import { ChildDashboard } from './screens/ChildDashboard';
@@ -67,10 +69,14 @@ export const App: React.FC = () => {
         ) : user.role === 'parent' ? (
           <>
             <ParentActiveTimers />
+            <EvidenceJournalPanel />
             <ParentDashboard />
           </>
         ) : (
-          <ChildDashboard />
+          <>
+            <ChildEvidencePanel />
+            <ChildDashboard />
+          </>
         )}
       </main>
 
