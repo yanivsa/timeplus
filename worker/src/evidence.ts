@@ -86,6 +86,54 @@ async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+function hasEvidenceStorage(env: Env): boolean {
+  return Boolean(env.EVIDENCE || env.EVIDENCE_KV);
+}
+
+async function putEvidenceObject(
+  env: Env,
+  key: string,
+  body: ArrayBuffer,
+  contentType: string,
+  expiresAt: string,
+  metadata: Record<string, string>
+): Promise<void> {
+  if (env.EVIDENCE) {
+    await env.EVIDENCE.put(key, body, {
+      httpMetadata: { contentType },
+      customMetadata: metadata,
+    });
+    return;
+  }
+  if (env.EVIDENCE_KV) {
+    const expiration = Math.floor(new Date(expiresAt).getTime() / 1000);
+    await env.EVIDENCE_KV.put(key, body, { expiration, metadata: { contentType, ...metadata } });
+    return;
+  }
+  throw new Error('Evidence storage is not configured');
+}
+
+async function getEvidenceObject(env: Env, key: string): Promise<ArrayBuffer | ReadableStream | null> {
+  if (env.EVIDENCE) {
+    const object = await env.EVIDENCE.get(key);
+    return object?.body || null;
+  }
+  if (env.EVIDENCE_KV) {
+    return env.EVIDENCE_KV.get(key, 'arrayBuffer');
+  }
+  return null;
+}
+
+async function deleteEvidenceObject(env: Env, key: string): Promise<void> {
+  if (env.EVIDENCE) {
+    await env.EVIDENCE.delete(key);
+    return;
+  }
+  if (env.EVIDENCE_KV) {
+    await env.EVIDENCE_KV.delete(key);
+  }
+}
+
 async function getSubmissionForUser(db: D1Database, submissionId: string, user: AuthUser) {
   return db
     .prepare(
@@ -102,7 +150,7 @@ async function getSubmissionForUser(db: D1Database, submissionId: string, user: 
 
 async function createEvidenceSubmission(request: Request, env: Env, user: AuthUser): Promise<Response> {
   if (user.role !== 'child') return errorJson('פעולה זו זמינה לחשבון ילד בלבד', 403);
-  if (!env.EVIDENCE) return errorJson('אחסון הראיות עדיין לא מופעל במערכת', 503);
+  if (!hasEvidenceStorage(env)) return errorJson('אחסון הראיות עדיין לא מופעל במערכת', 503);
 
   const body = (await request.json().catch(() => ({}))) as any;
   const taskInstanceId = String(body.taskInstanceId || '');
@@ -180,7 +228,7 @@ async function uploadEvidenceAsset(
   rawAssetKind: string
 ): Promise<Response> {
   if (user.role !== 'child') return errorJson('פעולה זו זמינה לחשבון ילד בלבד', 403);
-  if (!env.EVIDENCE) return errorJson('אחסון הראיות עדיין לא מופעל במערכת', 503);
+  if (!hasEvidenceStorage(env)) return errorJson('אחסון הראיות עדיין לא מופעל במערכת', 503);
 
   const assetKind = normalizeAssetKind(rawAssetKind);
   if (!assetKind) return errorJson('סוג קובץ ראיה אינו תקין', 400);
@@ -233,15 +281,12 @@ async function uploadEvidenceAsset(
   const objectKey = `evidence/${user.familyId}/${user.id}/${yyyyMm}/${submissionId}/${assetKind}-${assetId}.${ext}`;
   const expiresAt = addDaysIso(isVideo ? VIDEO_RETENTION_DAYS : IMAGE_RETENTION_DAYS);
 
-  await env.EVIDENCE.put(objectKey, body, {
-    httpMetadata: { contentType },
-    customMetadata: {
-      familyId: user.familyId,
-      childId: user.id,
-      submissionId,
-      assetKind,
-      sha256: hash,
-    },
+  await putEvidenceObject(env, objectKey, body, contentType, expiresAt, {
+    familyId: user.familyId,
+    childId: user.id,
+    submissionId,
+    assetKind,
+    sha256: hash,
   });
 
   try {
@@ -273,7 +318,7 @@ async function uploadEvidenceAsset(
         .run();
     }
   } catch (err) {
-    await env.EVIDENCE.delete(objectKey).catch(() => undefined);
+    await deleteEvidenceObject(env, objectKey).catch(() => undefined);
     throw err;
   }
 
@@ -461,9 +506,10 @@ async function listParentEvidence(env: Env, user: AuthUser, url: URL): Promise<R
     submissions: submissions || [],
     storage: {
       activeBytes: Number(storage?.active_bytes || 0),
-      warningAtBytes: 7 * 1024 * 1024 * 1024,
-      videoRetentionReductionAtBytes: 8 * 1024 * 1024 * 1024,
-      videoStopAtBytes: 9 * 1024 * 1024 * 1024,
+      backend: env.EVIDENCE ? 'r2' : 'kv',
+      warningAtBytes: env.EVIDENCE ? 7 * 1024 * 1024 * 1024 : 750 * 1024 * 1024,
+      videoRetentionReductionAtBytes: env.EVIDENCE ? 8 * 1024 * 1024 * 1024 : 850 * 1024 * 1024,
+      videoStopAtBytes: env.EVIDENCE ? 9 * 1024 * 1024 * 1024 : 950 * 1024 * 1024,
     },
   });
 }
@@ -507,7 +553,7 @@ async function streamParentEvidenceAsset(
   assetId: string
 ): Promise<Response> {
   if (user.role !== 'parent') return errorJson('פעולה זו מורשית להורים בלבד', 403);
-  if (!env.EVIDENCE) return errorJson('אחסון הראיות עדיין לא מופעל במערכת', 503);
+  if (!hasEvidenceStorage(env)) return errorJson('אחסון הראיות עדיין לא מופעל במערכת', 503);
 
   const asset = await env.DB
     .prepare(
@@ -521,10 +567,10 @@ async function streamParentEvidenceAsset(
     .first<{ object_key: string; mime_type: string; deleted_at: string | null }>();
 
   if (!asset || asset.deleted_at) return errorJson('המדיה אינה זמינה עוד', 404);
-  const object = await env.EVIDENCE.get(asset.object_key);
-  if (!object) return errorJson('המדיה אינה זמינה עוד', 404);
+  const objectBody = await getEvidenceObject(env, asset.object_key);
+  if (!objectBody) return errorJson('המדיה אינה זמינה עוד', 404);
 
-  return new Response(object.body, {
+  return new Response(objectBody, {
     headers: {
       'Content-Type': asset.mime_type,
       'Cache-Control': 'private, no-store',
@@ -553,7 +599,7 @@ export async function cleanupExpiredEvidence(env: Env): Promise<{ deleted: numbe
   let deleted = 0;
   for (const asset of expired || []) {
     try {
-      await env.EVIDENCE.delete(asset.object_key);
+      await deleteEvidenceObject(env, asset.object_key);
       await env.DB
         .prepare(`UPDATE submission_evidence_assets SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`)
         .bind(now, asset.id)

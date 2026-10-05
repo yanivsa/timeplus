@@ -10,6 +10,7 @@ export interface Env {
   INIT_SECRET?: string;
   PHOTOS?: R2Bucket;
   EVIDENCE?: R2Bucket;
+  EVIDENCE_KV?: KVNamespace;
   WEB_VERSION?: string;
   API_VERSION?: string;
   VAPID_PUBLIC_KEY?: string;

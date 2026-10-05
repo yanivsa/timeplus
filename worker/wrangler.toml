@@ -15,10 +15,9 @@ binding = "DB"
 database_name = "timeplus-db"
 database_id = "6453bce5-c013-4bff-a34d-52cc4bc991d4"
 
-[[r2_buckets]]
-binding = "EVIDENCE"
-bucket_name = "timeplus-evidence"
-preview_bucket_name = "timeplus-evidence"
+[[kv_namespaces]]
+binding = "EVIDENCE_KV"
+id = "e6827a1c3bd445e2afc01547df4c75d3"
 
 [triggers]
 crons = ["* * * * *"]
