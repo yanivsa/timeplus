@@ -30,7 +30,7 @@ export default {
     }
 
     const isWorkerRoute = url.pathname === '/healthz' || url.pathname === '/api' || url.pathname.startsWith('/api/');
-    if (!isWorkerRoute && !(env as any).ASSETS) {
+    if (!isWorkerRoute) {
       const target = new URL(url.pathname + url.search, PAGES_ORIGIN);
       return Response.redirect(target.toString(), 302);
     }
