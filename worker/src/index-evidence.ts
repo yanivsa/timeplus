@@ -5,6 +5,8 @@ import { handleEvidenceReviewRequest } from './evidence-review';
 import { ensureDailyTaskInstances } from './tasks';
 import { Env } from './types';
 
+const PAGES_ORIGIN = 'https://timeplus-app.pages.dev';
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const reviewResponse = await handleEvidenceReviewRequest(request, env);
@@ -25,6 +27,12 @@ export default {
         if (user) ctx.waitUntil(ensureDailyTaskInstances(env.DB, user.familyId).then(() => undefined));
       }
       return evidenceResponse;
+    }
+
+    const isWorkerRoute = url.pathname === '/healthz' || url.pathname === '/api' || url.pathname.startsWith('/api/');
+    if (!isWorkerRoute && !(env as any).ASSETS) {
+      const target = new URL(url.pathname + url.search, PAGES_ORIGIN);
+      return Response.redirect(target.toString(), 302);
     }
 
     return (baseWorker.fetch as any)(request, env, ctx);
