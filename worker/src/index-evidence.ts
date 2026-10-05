@@ -1,6 +1,8 @@
 import baseWorker from './index';
+import { getSessionUser } from './auth';
 import { cleanupExpiredEvidence, handleEvidenceRequest } from './evidence';
 import { handleEvidenceReviewRequest } from './evidence-review';
+import { ensureDailyTaskInstances } from './tasks';
 import { Env } from './types';
 
 export default {
@@ -8,8 +10,22 @@ export default {
     const reviewResponse = await handleEvidenceReviewRequest(request, env);
     if (reviewResponse) return reviewResponse;
 
+    const url = new URL(request.url);
     const evidenceResponse = await handleEvidenceRequest(request, env, ctx);
-    if (evidenceResponse) return evidenceResponse;
+    if (evidenceResponse) {
+      // The legacy submitTask() path immediately regenerates repeatable tasks.
+      // Evidence submission is a separate safe path, so explicitly invoke the
+      // same idempotent generator after a successful completion.
+      if (
+        evidenceResponse.ok &&
+        request.method.toUpperCase() === 'POST' &&
+        /^\/api\/child\/evidence\/[^/]+\/complete$/.test(url.pathname)
+      ) {
+        const user = await getSessionUser(request, env.DB);
+        if (user) ctx.waitUntil(ensureDailyTaskInstances(env.DB, user.familyId).then(() => undefined));
+      }
+      return evidenceResponse;
+    }
 
     return (baseWorker.fetch as any)(request, env, ctx);
   },
