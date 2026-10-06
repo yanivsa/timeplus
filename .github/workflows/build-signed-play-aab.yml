@@ -19,7 +19,7 @@ jobs:
           ref: main
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -65,14 +65,32 @@ jobs:
           grep -q 'PRIMARY_URL = "https://timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q 'FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
 
-      - name: Export upload certificate
+      - name: Verify active upload keystore and certificate
         env:
           KEYSTORE_PASSWORD: ${{ secrets.TIMEPLUS_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.TIMEPLUS_KEY_ALIAS }}
+          EXPECTED_SHA256: '0A:18:77:98:D4:79:75:94:5A:AE:AB:F6:A8:E5:F4:59:C9:9A:12:68:26:E8:28:B8:52:DE:75:D4:70:24:7B:61'
         run: |
           set -euo pipefail
-          keytool -export -rfc             -keystore android/keystores/timeplus-upload-key.jks             -storepass "$KEYSTORE_PASSWORD"             -alias "$KEY_ALIAS"             -file upload_certificate.pem
-          keytool -list -v             -keystore android/keystores/timeplus-upload-key.jks             -storepass "$KEYSTORE_PASSWORD"             -alias "$KEY_ALIAS"             | grep -E 'Alias name:|SHA256:' || true
+          if ! KEYTOOL_OUTPUT=$(keytool -list -v \
+            -keystore android/keystores/timeplus-upload-key.jks \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" 2>&1); then
+            echo '::error::The upload keystore cannot be opened with TIMEPLUS_KEYSTORE_PASSWORD/TIMEPLUS_KEY_ALIAS. Re-provision the matching keystore and store password.'
+            exit 1
+          fi
+          ACTUAL_SHA256=$(printf '%s\n' "$KEYTOOL_OUTPUT" | sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -1 | tr '[:lower:]' '[:upper:]')
+          test -n "$ACTUAL_SHA256" || { echo '::error::Could not read SHA-256 fingerprint from upload keystore'; exit 1; }
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::Upload certificate fingerprint mismatch. Expected active Play upload key $EXPECTED_SHA256 but got $ACTUAL_SHA256"
+            exit 1
+          fi
+          keytool -export -rfc \
+            -keystore android/keystores/timeplus-upload-key.jks \
+            -storepass "$KEYSTORE_PASSWORD" \
+            -alias "$KEY_ALIAS" \
+            -file upload_certificate.pem
+          echo "Verified active upload certificate SHA-256: $ACTUAL_SHA256"
 
       - name: Build signed release bundle
         run: |
@@ -84,7 +102,9 @@ jobs:
           set -euo pipefail
           AAB=android/app/build/outputs/bundle/release/app-release.aab
           test -f "$AAB"
-          jarsigner -verify -verbose -certs "$AAB"
+          jarsigner -verify -verbose -certs "$AAB" | tee jarsigner-verify.txt
+          grep -qi 'jar verified' jarsigner-verify.txt
+          unzip -l "$AAB" | grep -Eq 'META-INF/.*\.(RSA|DSA|EC)$'
           sha256sum "$AAB" | tee timeplus-v1.0.4-release.aab.sha256
           cp "$AAB" timeplus-v1.0.4-release.aab
 
