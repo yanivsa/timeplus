@@ -55,6 +55,11 @@ export interface TaskItem {
   child_name?: string;
   child_color?: string;
   child_avatar?: string;
+  verification_mode?: 'manual' | 'ai_media';
+  verification_rules_json?: string | null;
+  allow_video_proof?: number;
+  auto_approve_enabled?: number;
+  max_daily_auto_awards?: number | null;
 }
 
 export interface PendingApprovalItem extends TaskItem {
@@ -120,4 +125,9 @@ export interface TaskTemplateItem {
   one_time_date?: string | null;
   time_window_start?: string | null;
   time_window_end?: string | null;
+  verification_mode?: 'manual' | 'ai_media';
+  verification_rules_json?: string | null;
+  allow_video_proof?: number;
+  auto_approve_enabled?: number;
+  max_daily_auto_awards?: number | null;
 }

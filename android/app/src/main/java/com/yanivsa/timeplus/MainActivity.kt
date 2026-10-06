@@ -13,6 +13,7 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -31,10 +32,12 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import org.json.JSONObject
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -54,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var retryButton: Button
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingCaptureUri: Uri? = null
     private var activeBaseUrl = PRIMARY_URL
     private var currentPath = "/"
     private var fallbackAttempted = false
@@ -67,18 +71,32 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (filePathCallback != null) {
-            val results: Array<Uri>? = if (result.resultCode == RESULT_OK && result.data != null) {
+            val results: Array<Uri>? = if (result.resultCode == RESULT_OK) {
                 val dataUri = result.data?.data
                 val clipData = result.data?.clipData
-                if (clipData != null) {
-                    Array(clipData.itemCount) { i -> clipData.getItemAt(i).uri }
-                } else if (dataUri != null) {
-                    arrayOf(dataUri)
-                } else null
+                if (clipData != null) Array(clipData.itemCount) { i -> clipData.getItemAt(i).uri }
+                else if (dataUri != null) arrayOf(dataUri)
+                else pendingCaptureUri?.let { arrayOf(it) }
             } else null
-
             filePathCallback?.onReceiveValue(results)
             filePathCallback = null
+            pendingCaptureUri = null
+        }
+    }
+
+    private fun createCaptureIntent(params: WebChromeClient.FileChooserParams?): Intent? {
+        if (params?.isCaptureEnabled != true) return null
+        val acceptTypes = params.acceptTypes.orEmpty().map { it.lowercase() }
+        val wantsVideo = acceptTypes.any { it.startsWith("video/") }
+        val extension = if (wantsVideo) ".mp4" else ".jpg"
+        val captureDir = File(cacheDir, "evidence-capture").apply { mkdirs() }
+        val target = File.createTempFile("timeplus_", extension, captureDir)
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", target)
+        pendingCaptureUri = uri
+        return Intent(if (wantsVideo) MediaStore.ACTION_VIDEO_CAPTURE else MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (wantsVideo) { putExtra(MediaStore.EXTRA_DURATION_LIMIT, 30); putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1) }
         }
     }
 
@@ -126,7 +144,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.3"
+        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.4"
         webView.addJavascriptInterface(NativePushBridge(this), "TimePlusAndroid")
 
         val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -211,17 +229,12 @@ class MainActivity : AppCompatActivity() {
                 this@MainActivity.filePathCallback?.onReceiveValue(null)
                 this@MainActivity.filePathCallback = filePathCallback
 
-                val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
-                    type = "image/*"
-                }
-
-                try {
-                    fileChooserLauncher.launch(intent)
+                val intent = try {
+                    createCaptureIntent(fileChooserParams) ?: fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
                 } catch (e: Exception) {
-                    this@MainActivity.filePathCallback = null
-                    return false
+                    this@MainActivity.filePathCallback = null; pendingCaptureUri = null; return false
                 }
-                return true
+                return try { fileChooserLauncher.launch(intent); true } catch (e: Exception) { this@MainActivity.filePathCallback = null; pendingCaptureUri = null; false }
             }
         }
     }

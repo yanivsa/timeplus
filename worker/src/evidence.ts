@@ -1,14 +1,14 @@
 import { getSessionUser } from './auth';
 import { generateId } from './crypto';
 import { sendNotification } from './notifications';
+import { verifyEvidenceSubmission } from './ai-verification';
+import { addDaysIso, retentionDaysFor } from './evidence-retention';
 import { AuthUser, Env } from './types';
 
 export type EvidenceMediaKind = 'image' | 'screenshot' | 'video';
 export type EvidenceMediaSource = 'camera_capture' | 'gallery_upload' | 'unknown';
 export type EvidenceAssetKind = 'original' | 'normalized' | 'contact_sheet' | 'keyframe';
 
-const IMAGE_RETENTION_DAYS = 90;
-const VIDEO_RETENTION_DAYS = 30;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 25 * 1024 * 1024;
 
@@ -33,9 +33,6 @@ function errorJson(message: string, status = 400): Response {
   return json({ success: false, error: message }, status);
 }
 
-function addDaysIso(days: number): string {
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-}
 
 function normalizeMediaKind(value: unknown): EvidenceMediaKind | null {
   const candidate = String(value || '') as EvidenceMediaKind;
@@ -106,8 +103,7 @@ async function putEvidenceObject(
     return;
   }
   if (env.EVIDENCE_KV) {
-    const expiration = Math.floor(new Date(expiresAt).getTime() / 1000);
-    await env.EVIDENCE_KV.put(key, body, { expiration, metadata: { contentType, ...metadata } });
+    await env.EVIDENCE_KV.put(key, body, { metadata: { contentType, expiresAt, ...metadata } });
     return;
   }
   throw new Error('Evidence storage is not configured');
@@ -138,7 +134,7 @@ async function getSubmissionForUser(db: D1Database, submissionId: string, user: 
   return db
     .prepare(
       `SELECT ts.*, ti.family_id, ti.template_id, ti.title AS task_title, ti.status AS task_status,
-              ti.reward_minutes, ti.task_kind, c.name AS child_name
+              ti.reward_minutes, ti.task_kind, ti.verification_mode, ti.verification_rules_json, ti.auto_approve_enabled, ti.max_daily_auto_awards, c.name AS child_name
        FROM task_submissions ts
        JOIN task_instances ti ON ti.id = ts.task_instance_id
        JOIN children c ON c.id = ts.child_id
@@ -162,7 +158,7 @@ async function createEvidenceSubmission(request: Request, env: Env, user: AuthUs
 
   const task = await env.DB
     .prepare(
-      `SELECT id, family_id, child_id, title, status, allow_video_proof
+      `SELECT id, family_id, child_id, title, status, allow_video_proof, verification_mode
        FROM task_instances WHERE id = ? AND child_id = ? AND family_id = ?`
     )
     .bind(taskInstanceId, user.id, user.familyId)
@@ -178,7 +174,7 @@ async function createEvidenceSubmission(request: Request, env: Env, user: AuthUs
 
   const submissionId = generateId();
   const now = new Date().toISOString();
-  const expiresAt = addDaysIso(mediaKind === 'video' ? VIDEO_RETENTION_DAYS : IMAGE_RETENTION_DAYS);
+  const expiresAt = addDaysIso(retentionDaysFor(env, mediaKind));
 
   await env.DB
     .prepare(
@@ -279,7 +275,7 @@ async function uploadEvidenceAsset(
   const assetId = generateId();
   const ext = objectExtension(contentType);
   const objectKey = `evidence/${user.familyId}/${user.id}/${yyyyMm}/${submissionId}/${assetKind}-${assetId}.${ext}`;
-  const expiresAt = addDaysIso(isVideo ? VIDEO_RETENTION_DAYS : IMAGE_RETENTION_DAYS);
+  const expiresAt = addDaysIso(retentionDaysFor(env, isVideo ? 'video' : submission.media_kind));
 
   await putEvidenceObject(env, objectKey, body, contentType, expiresAt, {
     familyId: user.familyId,
@@ -311,11 +307,18 @@ async function uploadEvidenceAsset(
       )
       .run();
 
+    const priorAfterInsert = await env.DB.prepare(
+      `SELECT sea.id FROM submission_evidence_assets sea
+       JOIN task_submissions prior_ts ON prior_ts.id = sea.submission_id
+       WHERE prior_ts.child_id = ? AND sea.sha256 = ? AND sea.id <> ? AND sea.deleted_at IS NULL
+         AND (sea.created_at < ? OR (sea.created_at = ? AND sea.id < ?))
+       ORDER BY sea.created_at ASC, sea.id ASC LIMIT 1`
+    ).bind(user.id, hash, assetId, now, now, assetId).first<{ id: string }>();
+    if (priorAfterInsert && !duplicate) {
+      await env.DB.prepare(`UPDATE submission_evidence_assets SET duplicate_of_asset_id = ? WHERE id = ?`).bind(priorAfterInsert.id, assetId).run();
+    }
     if (assetKind === 'normalized' || assetKind === 'original') {
-      await env.DB
-        .prepare(`UPDATE task_submissions SET media_sha256 = ? WHERE id = ?`)
-        .bind(hash, submissionId)
-        .run();
+      await env.DB.prepare(`UPDATE task_submissions SET media_sha256 = ? WHERE id = ?`).bind(hash, submissionId).run();
     }
   } catch (err) {
     await deleteEvidenceObject(env, objectKey).catch(() => undefined);
@@ -347,8 +350,8 @@ async function completeEvidenceSubmission(
   const submission = await getSubmissionForUser(env.DB, submissionId, user);
   if (!submission || submission.child_id !== user.id) return errorJson('ההגשה לא נמצאה', 404);
 
-  if (submission.verification_status === 'needs_parent_review' && submission.task_status === 'submitted') {
-    return json({ success: true, status: 'needs_parent_review', submissionId, idempotent: true });
+  if (['pending_ai', 'needs_parent_review', 'ai_unavailable', 'rejected_by_ai', 'verified'].includes(String(submission.verification_status || ''))) {
+    return json({ success: true, status: submission.verification_status, submissionId, idempotent: true });
   }
   if (submission.verification_status !== 'uploading') return errorJson('ההגשה כבר הושלמה', 409);
 
@@ -381,19 +384,16 @@ async function completeEvidenceSubmission(
   if (taskUpdate.meta.changes === 0) return errorJson('המשימה כבר נמצאת בטיפול', 409);
 
   const duplicateDetected = assets.some((asset: any) => Boolean(asset.duplicate_of_asset_id));
-  const summary = duplicateDetected
-    ? 'זוהתה ראיה זהה לראיה קודמת; נדרשת בדיקת הורה.'
-    : 'הראיה נשמרה וממתינה לבדיקת הורה.';
-
-  await env.DB
-    .prepare(
-      `UPDATE task_submissions
-       SET verification_status = 'needs_parent_review', verification_route = 'none',
-           verification_summary = ?, review_mode = 'parent'
-       WHERE id = ?`
-    )
-    .bind(summary, submissionId)
-    .run();
+  const aiEligible = submission.verification_mode === 'ai_media' && String(env.AI_EVIDENCE_ENABLED || 'true') === 'true';
+  const nextStatus = duplicateDetected ? 'needs_parent_review' : aiEligible ? 'pending_ai' : 'needs_parent_review';
+  const summary = duplicateDetected ? 'זוהתה ראיה זהה לראיה קודמת; נדרשת בדיקת הורה.' : aiEligible ? 'הראיה נשמרה ונשלחה לאימות אוטומטי.' : 'הראיה נשמרה וממתינה לבדיקת הורה.';
+  await env.DB.prepare(`UPDATE task_submissions SET verification_status = ?, verification_route = ?, verification_summary = ?, review_mode = 'parent', retention_hold = 1 WHERE id = ?`).bind(nextStatus, aiEligible && !duplicateDetected ? 'free_router' : 'none', summary, submissionId).run();
+  if (aiEligible && !duplicateDetected) {
+    ctx.waitUntil(verifyEvidenceSubmission(env, submissionId).catch(async (err) => {
+      console.error('Evidence AI verification failed', err);
+      await env.DB.prepare(`UPDATE task_submissions SET verification_status='ai_unavailable', review_mode='parent', verification_summary='שירות האימות לא היה זמין; התיעוד נשמר לבדיקה ידנית.' WHERE id=? AND verification_status='pending_ai'`).bind(submissionId).run().catch(() => undefined);
+    }));
+  }
 
   await env.DB
     .prepare(
@@ -432,9 +432,9 @@ async function completeEvidenceSubmission(
   return json({
     success: true,
     submissionId,
-    status: 'needs_parent_review',
+    status: nextStatus,
     duplicateDetected,
-    message: 'התיעוד נשמר ונשלח לבדיקה',
+    message: aiEligible && !duplicateDetected ? 'התיעוד נשמר ונשלח לאימות' : 'התיעוד נשמר ונשלח לבדיקה',
   });
 }
 
@@ -458,14 +458,14 @@ async function listParentEvidence(env: Env, user: AuthUser, url: URL): Promise<R
   if (user.role !== 'parent') return errorJson('פעולה זו מורשית להורים בלבד', 403);
 
   const requestedStatus = url.searchParams.get('status');
-  const allowedStatuses = new Set(['uploading', 'needs_parent_review', 'verified', 'rejected_by_ai', 'ai_unavailable']);
+  const allowedStatuses = new Set(['uploading', 'pending_ai', 'needs_parent_review', 'verified', 'rejected_by_ai', 'ai_unavailable']);
   const status = requestedStatus && allowedStatuses.has(requestedStatus) ? requestedStatus : null;
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit') || 40)));
 
   let sql = `SELECT ts.id, ts.task_instance_id, ts.child_id, ts.note, ts.status,
                     ts.submitted_at, ts.reviewed_at, ts.verification_status, ts.verification_summary,
                     ts.review_mode, ts.media_kind, ts.media_source, ts.media_sha256,
-                    ts.evidence_expires_at, ts.retention_hold,
+                    ts.evidence_expires_at, ts.retention_hold, ts.verification_route, ts.verification_provider, ts.verification_model, ts.verification_checks_json, ts.verification_policy_version, ts.verification_prompt_version, ts.verification_risk_flags_json, ts.ai_shadow_decision, ts.auto_approval_eligible, ts.ai_verified_at,
                     ti.title AS task_title, ti.reward_minutes, ti.task_kind, ti.status AS task_status,
                     c.name AS child_name, c.color AS child_color, c.avatar AS child_avatar,
                     (SELECT sea.id FROM submission_evidence_assets sea
@@ -580,7 +580,7 @@ async function streamParentEvidenceAsset(
 }
 
 export async function cleanupExpiredEvidence(env: Env): Promise<{ deleted: number }> {
-  if (!env.EVIDENCE) return { deleted: 0 };
+  if (!hasEvidenceStorage(env)) return { deleted: 0 };
   const now = new Date().toISOString();
   const { results: expired } = await env.DB
     .prepare(

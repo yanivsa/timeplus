@@ -3,7 +3,7 @@ name: Pages Migration Smoke
 on:
   push:
     branches:
-      - migration/pages-origin-v1.0.3
+      - migration/pages-origin-v1.0.4
   pull_request:
     branches:
       - main
