@@ -6,16 +6,23 @@ ANDROID_DIR="$ROOT_DIR/android"
 KEYSTORE="$ANDROID_DIR/keystores/timeplus-upload-key.jks"
 PROPS="$ANDROID_DIR/keystores/keystore.properties"
 BUILD_GRADLE="$ANDROID_DIR/app/build.gradle"
-EXPECTED_SHA256="95:BA:F5:D7:A1:38:B6:B2:D8:F0:56:69:56:29:2B:C6:5E:D3:62:E0:08:9A:F1:6E:37:91:9D:F1:66:1D:9C:DA"
 
 fail() {
   echo "ERROR: $*" >&2
   exit 1
 }
 
-[[ -f "$KEYSTORE" ]] || fail "Missing existing Time+ upload keystore: $KEYSTORE. Do NOT generate a replacement key."
+[[ -f "$KEYSTORE" ]] || fail "Missing existing active Time+ upload keystore: $KEYSTORE. Do NOT generate a replacement key."
 [[ -f "$PROPS" ]] || fail "Missing keystore.properties: $PROPS"
 [[ -f "$BUILD_GRADLE" ]] || fail "Missing Android build.gradle"
+
+# The Play upload key was reset in October 2026. Never hardcode the retired fingerprint here.
+# The caller must copy the FULL currently-active SHA-256 fingerprint from Play Console.
+: "${TIMEPLUS_EXPECTED_UPLOAD_SHA256:?Set TIMEPLUS_EXPECTED_UPLOAD_SHA256 to the FULL active upload-certificate SHA-256 fingerprint shown in Google Play Console}"
+EXPECTED_SHA256="$(printf '%s' "$TIMEPLUS_EXPECTED_UPLOAD_SHA256" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
+
+# Refuse truncated or malformed fingerprints such as "0A:18:77:98...".
+[[ "$EXPECTED_SHA256" =~ ^([0-9A-F]{2}:){31}[0-9A-F]{2}$ ]] || fail "TIMEPLUS_EXPECTED_UPLOAD_SHA256 must be the complete 32-byte SHA-256 fingerprint, not a truncated value"
 
 grep -Eq 'versionCode[[:space:]]+5([[:space:]]|$)' "$BUILD_GRADLE" || fail "Expected versionCode 5"
 grep -Eq 'versionName[[:space:]]+"1\.0\.4"' "$BUILD_GRADLE" || fail "Expected versionName 1.0.4"
@@ -37,12 +44,12 @@ ACTUAL_SHA256="$(keytool -list -v \
   -keystore "$KEYSTORE" \
   -alias "$KEY_ALIAS" \
   -storepass "$KEYSTORE_PASSWORD" 2>/dev/null \
-  | awk -F': ' '/SHA256:/{print $2; exit}')"
+  | awk -F': ' '/SHA256:/{print toupper($2); exit}')"
 
-[[ -n "$ACTUAL_SHA256" ]] || fail "Could not read SHA-256 fingerprint from the existing upload keystore"
-[[ "$ACTUAL_SHA256" == "$EXPECTED_SHA256" ]] || fail "Upload-key fingerprint mismatch. Expected $EXPECTED_SHA256 but got $ACTUAL_SHA256. STOP — do not upload."
+[[ -n "$ACTUAL_SHA256" ]] || fail "Could not read SHA-256 fingerprint from the active upload keystore"
+[[ "$ACTUAL_SHA256" == "$EXPECTED_SHA256" ]] || fail "Upload-key fingerprint mismatch. Play expects $EXPECTED_SHA256 but this keystore is $ACTUAL_SHA256. STOP — do not upload."
 
-echo "Upload-key fingerprint verified: $ACTUAL_SHA256"
+echo "Active Play upload-key fingerprint verified: $ACTUAL_SHA256"
 
 cd "$ANDROID_DIR"
 chmod +x ./gradlew
@@ -61,6 +68,6 @@ if command -v apksigner >/dev/null 2>&1 && [[ -f "$APK" ]]; then
   apksigner verify --verbose "$APK" >/dev/null || fail "APK signature verification failed"
 fi
 
-echo "OK: Time+ 1.0.4 / versionCode 5 release build completed and signed with the existing upload key."
+echo "OK: Time+ 1.0.4 / versionCode 5 release build completed and signed with the active Play upload key."
 echo "AAB: $AAB"
 [[ -f "$APK" ]] && echo "APK: $APK"
