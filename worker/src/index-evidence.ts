@@ -29,8 +29,19 @@ export default {
       return evidenceResponse;
     }
 
-    const isWorkerRoute = url.pathname === '/healthz' || url.pathname === '/api' || url.pathname.startsWith('/api/');
+    const isWorkerRoute =
+      url.pathname === '/healthz' || url.pathname === '/api' || url.pathname.startsWith('/api/');
+
+    // Backward compatibility for the old Android APKs: when Static Assets are
+    // bound, serve the SPA on the legacy workers.dev origin so WebView stays
+    // inside the app instead of following a cross-origin redirect to Pages.
     if (!isWorkerRoute) {
+      const assets = (env as any).ASSETS;
+      if (assets && typeof assets.fetch === 'function') {
+        return assets.fetch(request);
+      }
+
+      // Safety fallback for a deployment that unexpectedly has no asset binding.
       const target = new URL(url.pathname + url.search, PAGES_ORIGIN);
       return Response.redirect(target.toString(), 302);
     }
