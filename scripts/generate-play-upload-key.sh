@@ -1,31 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-OUT_DIR="${1:-$PWD/timeplus-upload-key}"
-mkdir -p "$OUT_DIR"
+cat >&2 <<'EOF'
+ERROR: Do not generate a new Time+ upload key.
 
-: "${TIMEPLUS_KEYSTORE_PASSWORD:?Set TIMEPLUS_KEYSTORE_PASSWORD}"
-: "${TIMEPLUS_KEY_PASSWORD:?Set TIMEPLUS_KEY_PASSWORD}"
-TIMEPLUS_KEY_ALIAS="${TIMEPLUS_KEY_ALIAS:-timeplus-upload}"
+Time+ already has an established Google Play upload key. Creating a replacement key here would produce an AAB that does not match the existing Play Console upload certificate.
 
-JKS="$OUT_DIR/timeplus-upload-key.jks"
-PEM="$OUT_DIR/upload_certificate.pem"
+Use the existing local key instead:
+  android/keystores/timeplus-upload-key.jks
+  android/keystores/keystore.properties
 
-if [[ -e "$JKS" || -e "$PEM" ]]; then
-  echo "Refusing to overwrite existing key material in $OUT_DIR" >&2
-  exit 1
-fi
+Expected SHA-256 upload-certificate fingerprint:
+  95:BA:F5:D7:A1:38:B6:B2:D8:F0:56:69:56:29:2B:C6:5E:D3:62:E0:08:9A:F1:6E:37:91:9D:F1:66:1D:9C:DA
 
-keytool -genkeypair   -v   -keystore "$JKS"   -storepass "$TIMEPLUS_KEYSTORE_PASSWORD"   -keypass "$TIMEPLUS_KEY_PASSWORD"   -alias "$TIMEPLUS_KEY_ALIAS"   -keyalg RSA   -keysize 4096   -validity 10000   -dname "CN=TimePlus Upload, OU=Android, O=YanivSA, C=IL"
+To build the final 1.0.4 release, run:
+  bash release-play/build-signed-1.0.4.sh
+EOF
 
-keytool -export -rfc   -keystore "$JKS"   -storepass "$TIMEPLUS_KEYSTORE_PASSWORD"   -alias "$TIMEPLUS_KEY_ALIAS"   -file "$PEM"
-
-echo
-echo "Generated:"
-echo "  Private upload keystore: $JKS"
-echo "  Public certificate:      $PEM"
-echo
-echo "SHA-256 certificate fingerprint:"
-keytool -list -v   -keystore "$JKS"   -storepass "$TIMEPLUS_KEYSTORE_PASSWORD"   -alias "$TIMEPLUS_KEY_ALIAS"   | grep 'SHA256:'
-echo
-echo "IMPORTANT: Never commit the .jks file or passwords to Git."
+exit 1
