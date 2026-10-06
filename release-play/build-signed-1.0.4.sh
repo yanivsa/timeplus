@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ANDROID_DIR="$ROOT_DIR/android"
 KEYSTORE="$ANDROID_DIR/keystores/timeplus-upload-key.jks"
 PROPS="$ANDROID_DIR/keystores/keystore.properties"
+BUILD_GRADLE="$ANDROID_DIR/app/build.gradle"
 EXPECTED_SHA256="95:BA:F5:D7:A1:38:B6:B2:D8:F0:56:69:56:29:2B:C6:5E:D3:62:E0:08:9A:F1:6E:37:91:9D:F1:66:1D:9C:DA"
 
 fail() {
@@ -14,10 +15,14 @@ fail() {
 
 [[ -f "$KEYSTORE" ]] || fail "Missing existing Time+ upload keystore: $KEYSTORE. Do NOT generate a replacement key."
 [[ -f "$PROPS" ]] || fail "Missing keystore.properties: $PROPS"
+[[ -f "$BUILD_GRADLE" ]] || fail "Missing Android build.gradle"
+
+grep -Eq 'versionCode[[:space:]]+5([[:space:]]|$)' "$BUILD_GRADLE" || fail "Expected versionCode 5"
+grep -Eq 'versionName[[:space:]]+"1\.0\.4"' "$BUILD_GRADLE" || fail "Expected versionName 1.0.4"
 
 get_prop() {
   local key="$1"
-  awk -F= -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$PROPS"
+  awk -F= -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); gsub(/\r$/, ""); print; exit }' "$PROPS"
 }
 
 KEYSTORE_PASSWORD="$(get_prop KEYSTORE_PASSWORD)"
@@ -48,9 +53,9 @@ APK="$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk"
 
 [[ -f "$AAB" ]] || fail "Signed AAB was not produced: $AAB"
 
-if ! jarsigner -verify "$AAB" >/dev/null 2>&1; then
-  fail "AAB signature verification failed"
-fi
+VERIFY_OUTPUT="$(LANG=C jarsigner -verify -verbose -certs "$AAB" 2>&1 || true)"
+grep -q 'jar verified\.' <<<"$VERIFY_OUTPUT" || fail "AAB is not cryptographically verified by jarsigner"
+unzip -Z1 "$AAB" | grep -Eq '^META-INF/.*\.(RSA|DSA|EC)$' || fail "AAB contains no JAR signing certificate entry"
 
 if command -v apksigner >/dev/null 2>&1 && [[ -f "$APK" ]]; then
   apksigner verify --verbose "$APK" >/dev/null || fail "APK signature verification failed"
