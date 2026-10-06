@@ -3,14 +3,11 @@ import {
   Bell,
   CheckCheck,
   Smartphone,
-  Tv,
   ListTodo,
   CheckCircle2,
   Sparkles,
   Gift,
   XCircle,
-  X,
-  Volume2,
 } from 'lucide-react';
 import {
   fetchNotifications,
@@ -72,14 +69,6 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  const handleToggle = () => {
-    audio.playTap();
-    setIsOpen(!isOpen);
-    if (!isOpen && unreadCount > 0) {
-      handleMarkAllRead();
-    }
-  };
-
   const handleMarkAllRead = async () => {
     await markAllNotificationsRead();
     setUnreadCount(0);
@@ -88,8 +77,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
     );
   };
 
-  const handleEnablePush = async () => {
-    audio.playTap();
+  const handleEnablePush = async (playTap = true) => {
+    if (playTap) audio.playTap();
+    if (subscribing) return;
+
     setSubscribing(true);
     try {
       const res = await subscribeToPushNotifications();
@@ -101,6 +92,29 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
       }
     } finally {
       setSubscribing(false);
+    }
+  };
+
+  const handleToggle = () => {
+    audio.playTap();
+    const opening = !isOpen;
+    setIsOpen(opening);
+
+    if (opening && unreadCount > 0) {
+      void handleMarkAllRead();
+    }
+
+    // A notification permission request must originate from a user gesture.
+    // On the first bell tap, request it immediately so mobile Chrome shows its
+    // native permission prompt without requiring a second hidden/extra tap.
+    if (
+      opening &&
+      pushSupported &&
+      !isSubscribed &&
+      !subscribing &&
+      getNotificationPermission() === 'default'
+    ) {
+      void handleEnablePush(false);
     }
   };
 
@@ -154,7 +168,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
       </button>
 
       {isOpen && (
-        <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-night-900 border border-purple-500/30 shadow-2xl p-4 z-50 animate-fade-in backdrop-blur-md">
+        <div className="fixed top-20 left-4 right-4 sm:left-auto sm:right-4 sm:w-96 rounded-2xl bg-night-900 border border-purple-500/30 shadow-2xl p-4 z-[100] animate-fade-in backdrop-blur-md">
           {/* Header */}
           <div className="flex items-center justify-between pb-3 border-b border-purple-500/20">
             <div className="flex items-center gap-2">
@@ -173,7 +187,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
           </div>
 
           {/* Device Push Toggle Banner */}
-          {pushSupported && (
+          {pushSupported ? (
             <div className="my-2.5 p-2.5 rounded-xl bg-night-950 border border-purple-500/20 text-xs flex items-center justify-between gap-2">
               {isSubscribed ? (
                 <div className="flex items-center gap-2 text-emerald-400">
@@ -183,17 +197,25 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
               ) : (
                 <>
                   <div className="text-purple-300/90 text-[11px]">
-                    רוצה לקבל התראה למסך הנעילה?
+                    {getNotificationPermission() === 'denied'
+                      ? 'Chrome חוסם כרגע התראות לאתר זה'
+                      : 'רוצה לקבל התראה למסך הנעילה?'}
                   </div>
-                  <button
-                    onClick={handleEnablePush}
-                    disabled={subscribing}
-                    className="py-1 px-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] shrink-0 transition"
-                  >
-                    {subscribing ? 'מפעיל...' : 'הפעל התראות 🔔'}
-                  </button>
+                  {getNotificationPermission() !== 'denied' && (
+                    <button
+                      onClick={() => handleEnablePush(true)}
+                      disabled={subscribing}
+                      className="py-1 px-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white font-bold text-[11px] shrink-0 transition disabled:opacity-60"
+                    >
+                      {subscribing ? 'מפעיל...' : 'הפעל התראות 🔔'}
+                    </button>
+                  )}
                 </>
               )}
+            </div>
+          ) : (
+            <div className="my-2.5 p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 text-[11px] text-amber-200">
+              הדפדפן הזה אינו מאפשר Web Push במצב הנוכחי.
             </div>
           )}
 
