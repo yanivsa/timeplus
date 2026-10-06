@@ -40,7 +40,8 @@ export async function registerServiceWorker(): Promise<ServiceWorkerRegistration
 export async function getCurrentPushSubscription(): Promise<PushSubscription | null> {
   if (!isPushSupported()) return null;
   try {
-    const reg = await navigator.serviceWorker.ready;
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    if (!reg) return null;
     return await reg.pushManager.getSubscription();
   } catch (err) {
     console.error('Failed to get push subscription:', err);
@@ -54,14 +55,28 @@ export async function subscribeToPushNotifications(): Promise<{ success: boolean
   }
 
   try {
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      return { success: false, error: 'הרשאת ההתראות לא אושרה' };
-    }
-
     const reg = await registerServiceWorker();
     if (!reg) {
-      return { success: false, error: 'רישום שירות ההתראות נכשל' };
+      return { success: false, error: 'רישום שירות ההתראות נכשל. רענן את הדף ונסה שוב.' };
+    }
+
+    let permission = Notification.permission;
+    if (permission === 'denied') {
+      return {
+        success: false,
+        error: 'Chrome חוסם כרגע התראות לאתר הזה. פתח את הגדרות האתר ב-Chrome, שנה התראות ל״אפשר״ ואז נסה שוב.',
+      };
+    }
+
+    if (permission === 'default') {
+      permission = await Notification.requestPermission();
+    }
+
+    if (permission !== 'granted') {
+      return {
+        success: false,
+        error: 'הרשאת ההתראות לא אושרה. אם Chrome לא הציג חלון, בדוק בהגדרות האתר שהתראות אינן חסומות.',
+      };
     }
 
     // Get VAPID public key from backend
@@ -97,7 +112,8 @@ export async function subscribeToPushNotifications(): Promise<{ success: boolean
 export async function unsubscribeFromPushNotifications(): Promise<{ success: boolean; error?: string }> {
   if (!isPushSupported()) return { success: true };
   try {
-    const reg = await navigator.serviceWorker.ready;
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    if (!reg) return { success: true };
     const sub = await reg.pushManager.getSubscription();
     if (sub) {
       const endpoint = sub.endpoint;
