@@ -91,6 +91,10 @@ export const ParentDashboard: React.FC = () => {
   const [templateTimeStart, setTemplateTimeStart] = useState('');
   const [templateTimeEnd, setTemplateTimeEnd] = useState('');
   const [templateChildIds, setTemplateChildIds] = useState<string[]>([]);
+  const [templateAiEnabled, setTemplateAiEnabled] = useState(false);
+  const [templateAllowVideo, setTemplateAllowVideo] = useState(false);
+  const [templateAutoApprove, setTemplateAutoApprove] = useState(false);
+  const [templateAiInstructions, setTemplateAiInstructions] = useState('');
 
   // Edit template state
   const [editingTemplate, setEditingTemplate] = useState<TaskTemplateItem | null>(null);
@@ -104,6 +108,10 @@ export const ParentDashboard: React.FC = () => {
   const [editTimeStart, setEditTimeStart] = useState('');
   const [editTimeEnd, setEditTimeEnd] = useState('');
   const [editChildIds, setEditChildIds] = useState<string[]>([]);
+  const [editAiEnabled, setEditAiEnabled] = useState(false);
+  const [editAllowVideo, setEditAllowVideo] = useState(false);
+  const [editAutoApprove, setEditAutoApprove] = useState(false);
+  const [editAiInstructions, setEditAiInstructions] = useState('');
 
   const [addChildModal, setAddChildModal] = useState(false);
   const [newChildName, setNewChildName] = useState('');
@@ -343,6 +351,16 @@ export const ParentDashboard: React.FC = () => {
           timeWindowStart: templateTimeStart || null,
           timeWindowEnd: templateTimeEnd || null,
           assignedChildIds: templateChildIds.length > 0 ? templateChildIds : children.map((c) => c.id),
+          verificationMode: templateAiEnabled ? 'ai_media' : 'manual',
+          verificationRules: templateAiEnabled ? {
+            activityType: templateAutoApprove ? 'educational_result_screenshot' : 'general_visual_evidence',
+            requiredChecks: templateAutoApprove ? ['correct_activity','completion_visible','result_readable','screen_ui_visible'] : ['correct_activity','completion_visible'],
+            requireScreenUi: templateAutoApprove,
+            instructions: templateAiInstructions.trim() || undefined,
+          } : {},
+          allowVideoProof: templateAiEnabled && templateAllowVideo,
+          autoApproveEnabled: templateAiEnabled && templateAutoApprove,
+          maxDailyAutoAwards: templateAiEnabled && templateAutoApprove ? 3 : null,
         }),
       });
       audio.playApproval();
@@ -357,6 +375,7 @@ export const ParentDashboard: React.FC = () => {
       setTemplateTimeStart('');
       setTemplateTimeEnd('');
       setTemplateChildIds([]);
+      setTemplateAiEnabled(false); setTemplateAllowVideo(false); setTemplateAutoApprove(false); setTemplateAiInstructions('');
       setStatusMessage({ text: 'תבנית המשימה נוצרה בהצלחה!', type: 'success' });
       await loadTemplates();
       await loadDashboard();
@@ -394,6 +413,10 @@ export const ParentDashboard: React.FC = () => {
     setEditTimeStart(tpl.time_window_start || '');
     setEditTimeEnd(tpl.time_window_end || '');
     setEditChildIds(tpl.assigned_child_ids && tpl.assigned_child_ids.length > 0 ? tpl.assigned_child_ids : children.map((c) => c.id));
+    setEditAiEnabled(tpl.verification_mode === 'ai_media');
+    setEditAllowVideo(Number(tpl.allow_video_proof || 0) === 1);
+    setEditAutoApprove(Number(tpl.auto_approve_enabled || 0) === 1);
+    try { const rules = tpl.verification_rules_json ? JSON.parse(tpl.verification_rules_json) : {}; setEditAiInstructions(typeof rules?.instructions === 'string' ? rules.instructions : ''); } catch { setEditAiInstructions(''); }
   };
 
   // Update Template
@@ -416,6 +439,16 @@ export const ParentDashboard: React.FC = () => {
           timeWindowStart: editTimeStart || null,
           timeWindowEnd: editTimeEnd || null,
           assignedChildIds: editChildIds.length > 0 ? editChildIds : children.map((c) => c.id),
+          verificationMode: editAiEnabled ? 'ai_media' : 'manual',
+          verificationRules: editAiEnabled ? {
+            activityType: editAutoApprove ? 'educational_result_screenshot' : 'general_visual_evidence',
+            requiredChecks: editAutoApprove ? ['correct_activity','completion_visible','result_readable','screen_ui_visible'] : ['correct_activity','completion_visible'],
+            requireScreenUi: editAutoApprove,
+            instructions: editAiInstructions.trim() || undefined,
+          } : {},
+          allowVideoProof: editAiEnabled && editAllowVideo,
+          autoApproveEnabled: editAiEnabled && editAutoApprove,
+          maxDailyAutoAwards: editAiEnabled && editAutoApprove ? 3 : null,
         }),
       });
       audio.playApproval();
@@ -1580,6 +1613,11 @@ export const ParentDashboard: React.FC = () => {
                 </div>
               </div>
 
+              <div className="rounded-2xl border border-cyan-500/20 bg-night-950/70 p-3 space-y-2">
+                <label className="flex items-center justify-between text-xs text-cyan-200 font-semibold">אימות AI לתיעוד<input type="checkbox" checked={templateAiEnabled} onChange={(e) => { setTemplateAiEnabled(e.target.checked); if (!e.target.checked) { setTemplateAllowVideo(false); setTemplateAutoApprove(false); } }} /></label>
+                {templateAiEnabled && <><textarea value={templateAiInstructions} onChange={(e) => setTemplateAiInstructions(e.target.value)} rows={2} placeholder="מה צריך להופיע בראיה כדי להוכיח שהמשימה הושלמה?" className="w-full rounded-xl bg-night-900 border border-cyan-500/20 p-2 text-xs text-white"/><label className="flex items-center justify-between text-xs text-purple-200">אפשר גם וידאו קצר<input type="checkbox" checked={templateAllowVideo} onChange={(e) => setTemplateAllowVideo(e.target.checked)}/></label><label className="flex items-center justify-between text-xs text-purple-200">אישור אוטומטי לצילום-מסך לימודי ברור בלבד<input type="checkbox" checked={templateAutoApprove} onChange={(e) => setTemplateAutoApprove(e.target.checked)}/></label><p className="text-[10px] text-purple-500">מצלמה ווידאו לעולם לא יאושרו אוטומטית. כש-AI לא בטוח, התיעוד עובר אליך.</p></>}
+              </div>
+
               {children.length > 0 && (
                 <div>
                   <label className="block text-xs text-purple-200 mb-1.5">משויך לילדים:</label>
@@ -1736,6 +1774,11 @@ export const ParentDashboard: React.FC = () => {
                   <input type="time" value={editTimeEnd} onChange={(e) => setEditTimeEnd(e.target.value)}
                     className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-2 text-sm text-white" />
                 </div>
+              </div>
+
+              <div className="rounded-2xl border border-cyan-500/20 bg-night-950/70 p-3 space-y-2">
+                <label className="flex items-center justify-between text-xs text-cyan-200 font-semibold">אימות AI לתיעוד<input type="checkbox" checked={editAiEnabled} onChange={(e) => { setEditAiEnabled(e.target.checked); if (!e.target.checked) { setEditAllowVideo(false); setEditAutoApprove(false); } }} /></label>
+                {editAiEnabled && <><textarea value={editAiInstructions} onChange={(e) => setEditAiInstructions(e.target.value)} rows={2} placeholder="מה צריך להופיע בראיה?" className="w-full rounded-xl bg-night-900 border border-cyan-500/20 p-2 text-xs text-white"/><label className="flex items-center justify-between text-xs text-purple-200">אפשר גם וידאו קצר<input type="checkbox" checked={editAllowVideo} onChange={(e) => setEditAllowVideo(e.target.checked)}/></label><label className="flex items-center justify-between text-xs text-purple-200">אישור אוטומטי לצילום-מסך לימודי ברור בלבד<input type="checkbox" checked={editAutoApprove} onChange={(e) => setEditAutoApprove(e.target.checked)}/></label></>}
               </div>
 
               {children.length > 0 && (

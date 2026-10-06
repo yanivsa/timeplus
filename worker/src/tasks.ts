@@ -101,8 +101,8 @@ export async function ensureDailyTaskInstances(
           .prepare(
             `INSERT INTO task_instances (
               id, family_id, template_id, child_id, title, description, 
-              reward_minutes, requires_photo, task_kind, status, due_date, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+              reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json, allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
           )
           .bind(
             instanceId,
@@ -114,6 +114,11 @@ export async function ensureDailyTaskInstances(
             tpl.reward_minutes,
             tpl.requires_photo,
             tpl.task_kind || 'bonus',
+            tpl.verification_mode || 'manual',
+            tpl.verification_rules_json || null,
+            Number(tpl.allow_video_proof || 0),
+            Number(tpl.auto_approve_enabled || 0),
+            tpl.max_daily_auto_awards ?? null,
             targetDateStr
           )
           .run();
@@ -231,12 +236,12 @@ export async function submitTask(
   if (instance.template_id) {
     const tpl = await db
       .prepare(
-        `SELECT schedule_type, title, description, reward_minutes, requires_photo, task_kind
+        `SELECT schedule_type, title, description, reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json, allow_video_proof, auto_approve_enabled, max_daily_auto_awards
          FROM task_templates 
          WHERE id = ? AND is_active = 1 AND archived_at IS NULL`
       )
       .bind(instance.template_id)
-      .first<{ schedule_type: string; title: string; description: string | null; reward_minutes: number; requires_photo: number; task_kind: 'mandatory' | 'bonus' }>();
+      .first<{ schedule_type: string; title: string; description: string | null; reward_minutes: number; requires_photo: number; task_kind: 'mandatory' | 'bonus'; verification_mode: 'manual' | 'ai_media'; verification_rules_json: string | null; allow_video_proof: number; auto_approve_enabled: number; max_daily_auto_awards: number | null }>();
 
     if (tpl && tpl.schedule_type === 'repeatable') {
       const nextInstanceId = generateId();
@@ -272,7 +277,8 @@ export async function approveTask(
   db: D1Database,
   instanceId: string,
   parentFamilyId: string,
-  customRewardMinutes?: number
+  customRewardMinutes?: number,
+  actor: 'parent' | 'system' = 'parent'
 ): Promise<{ success: boolean; error?: string; minutesAwarded?: number; xpAwarded?: number }> {
   // Guarded fetch
   const instance = await db
@@ -307,10 +313,10 @@ export async function approveTask(
   const updateRes = await db
     .prepare(
       `UPDATE task_instances 
-       SET status = 'approved', reward_minutes = ?, reviewed_at = ?, reviewed_by = 'parent', updated_at = ? 
+       SET status = 'approved', reward_minutes = ?, reviewed_at = ?, reviewed_by = ?, updated_at = ? 
        WHERE id = ? AND status = 'submitted'`
     )
-    .bind(storedRewardMinutes, now, now, instanceId)
+    .bind(storedRewardMinutes, now, actor, now, instanceId)
     .run();
 
   if (updateRes.meta.changes === 0) {
@@ -348,7 +354,7 @@ export async function approveTask(
       .prepare(
         `INSERT INTO minute_transactions (
           id, family_id, child_id, type, amount, balance_after, reason, task_instance_id, created_by, created_at
-        ) VALUES (?, ?, ?, 'earn', ?, ?, ?, ?, 'parent', ?)`
+        ) VALUES (?, ?, ?, 'earn', ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         txId,
@@ -358,6 +364,7 @@ export async function approveTask(
         newBalance,
         `אישור משימה: ${instance.title}`,
         instanceId,
+        actor,
         now
       )
       .run();
@@ -481,11 +488,13 @@ export async function approveTask(
   await db
     .prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
-       VALUES (?, ?, 'parent', 'parent', 'task_approved', 'task_instance', ?, ?, ?)`
+       VALUES (?, ?, ?, ?, 'task_approved', 'task_instance', ?, ?, ?)`
     )
     .bind(
       generateId(),
       parentFamilyId,
+      actor === 'system' ? 'system' : 'parent',
+      actor === 'system' ? 'ai_verifier' : 'parent',
       instanceId,
       JSON.stringify({ rewardMinutes, xpAwarded, newBalance, levelUp: isLevelUp }),
       now

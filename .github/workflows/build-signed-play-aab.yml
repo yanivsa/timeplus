@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   signed-play-aab:
-    name: Build signed Time+ 1.0.3 AAB
+    name: Build signed Time+ 1.0.4 AAB
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -60,8 +60,8 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'applicationId "com.yanivsa.timeplus"' android/app/build.gradle
-          grep -q 'versionCode 4' android/app/build.gradle
-          grep -q 'versionName "1.0.3"' android/app/build.gradle
+          grep -q 'versionCode 5' android/app/build.gradle
+          grep -q 'versionName "1.0.4"' android/app/build.gradle
           grep -q 'PRIMARY_URL = "https://timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q 'FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
 
@@ -85,16 +85,16 @@ jobs:
           AAB=android/app/build/outputs/bundle/release/app-release.aab
           test -f "$AAB"
           jarsigner -verify -verbose -certs "$AAB"
-          sha256sum "$AAB" | tee timeplus-v1.0.3-release.aab.sha256
-          cp "$AAB" timeplus-v1.0.3-release.aab
+          sha256sum "$AAB" | tee timeplus-v1.0.4-release.aab.sha256
+          cp "$AAB" timeplus-v1.0.4-release.aab
 
       - name: Upload signed Play release package
         uses: actions/upload-artifact@v4
         with:
-          name: timeplus-v1.0.3-signed-play-package
+          name: timeplus-v1.0.4-signed-play-package
           path: |
-            timeplus-v1.0.3-release.aab
-            timeplus-v1.0.3-release.aab.sha256
+            timeplus-v1.0.4-release.aab
+            timeplus-v1.0.4-release.aab.sha256
             upload_certificate.pem
           if-no-files-found: error
           retention-days: 90

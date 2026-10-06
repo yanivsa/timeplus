@@ -19,6 +19,10 @@ database_id = "6453bce5-c013-4bff-a34d-52cc4bc991d4"
 binding = "EVIDENCE_KV"
 id = "e6827a1c3bd445e2afc01547df4c75d3"
 
+[[services]]
+binding = "FREE_ROUTER"
+service = "free-llm-router"
+
 [triggers]
 crons = ["* * * * *"]
 
@@ -30,5 +34,7 @@ TIMEZONE = "Asia/Jerusalem"
 WEB_VERSION = "1.0.0"
 API_VERSION = "1.0.0"
 AI_EVIDENCE_ENABLED = "true"
-EVIDENCE_IMAGE_RETENTION_DAYS = "90"
-EVIDENCE_VIDEO_RETENTION_DAYS = "30"
+AI_EVIDENCE_MODE = "shadow"
+AI_DIRECT_OPENROUTER_FALLBACK = "true"
+EVIDENCE_IMAGE_RETENTION_DAYS = "14"
+EVIDENCE_VIDEO_RETENTION_DAYS = "14"

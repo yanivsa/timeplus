@@ -11,6 +11,14 @@ export interface Env {
   PHOTOS?: R2Bucket;
   EVIDENCE?: R2Bucket;
   EVIDENCE_KV?: KVNamespace;
+  FREE_ROUTER?: Fetcher;
+  TIMEPLUS_ROUTER_TOKEN?: string;
+  AI_EVIDENCE_ENABLED?: string;
+  AI_EVIDENCE_MODE?: string;
+  AI_DIRECT_OPENROUTER_FALLBACK?: string;
+  OPENROUTER_API_KEY?: string;
+  EVIDENCE_IMAGE_RETENTION_DAYS?: string;
+  EVIDENCE_VIDEO_RETENTION_DAYS?: string;
   WEB_VERSION?: string;
   API_VERSION?: string;
   VAPID_PUBLIC_KEY?: string;
@@ -97,6 +105,11 @@ export interface TaskTemplate {
   assigned_child_ids?: string[];
   task_kind?: 'mandatory' | 'bonus';
   one_time_date?: string | null;
+  verification_mode?: 'manual' | 'ai_media';
+  verification_rules_json?: string | null;
+  allow_video_proof?: number;
+  auto_approve_enabled?: number;
+  max_daily_auto_awards?: number | null;
 }
 
 export type TaskStatus = 'open' | 'submitted' | 'approved' | 'rejected' | 'expired' | 'cancelled';
@@ -121,6 +134,11 @@ export interface TaskInstance {
   submission_note?: string;
   submission_photo_key?: string;
   child_name?: string;
+  verification_mode?: 'manual' | 'ai_media';
+  verification_rules_json?: string | null;
+  allow_video_proof?: number;
+  auto_approve_enabled?: number;
+  max_daily_auto_awards?: number | null;
 }
 
 export interface TaskSubmission {

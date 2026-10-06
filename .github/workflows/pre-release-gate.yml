@@ -3,7 +3,7 @@ name: Pre-Release Gate
 on:
   push:
     branches:
-      - migration/pages-origin-v1.0.3
+      - migration/pages-origin-v1.0.4
   pull_request:
     branches:
       - main
@@ -11,7 +11,7 @@ on:
 
 jobs:
   release-gate:
-    name: Time+ 1.0.3 pre-release gate
+    name: Time+ 1.0.4 pre-release gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -46,8 +46,8 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'applicationId "com.yanivsa.timeplus"' android/app/build.gradle
-          grep -q 'versionCode 4' android/app/build.gradle
-          grep -q 'versionName "1.0.3"' android/app/build.gradle
+          grep -q 'versionCode 5' android/app/build.gradle
+          grep -q 'versionName "1.0.4"' android/app/build.gradle
           grep -q '"package_name": "com.yanivsa.timeplus"' android/app/google-services.json
           grep -q '"project_id": "timeplus-e2f2f"' android/app/google-services.json
           grep -q 'android.permission.POST_NOTIFICATIONS' android/app/src/main/AndroidManifest.xml
@@ -60,7 +60,7 @@ jobs:
           grep -q 'FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q '"timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q '"timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
-          grep -q 'TimePlusApp/1.0.3' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'TimePlusApp/1.0.4' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
 
       - name: Verify native notification plumbing
         run: |
@@ -121,7 +121,7 @@ jobs:
       - name: Upload unsigned QA release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: timeplus-1.0.3-pre-release
+          name: timeplus-1.0.4-pre-release
           path: |
             android/app/build/outputs/bundle/release/app-release.aab
             android/app/build/outputs/apk/release/*.apk

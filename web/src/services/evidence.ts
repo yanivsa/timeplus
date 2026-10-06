@@ -1,113 +1,14 @@
 import { apiRequest, apiUpload } from './api';
-
 export type EvidenceMediaSource = 'camera_capture' | 'gallery_upload';
-export type EvidenceMediaKind = 'image' | 'screenshot';
-
-export interface EvidenceSubmissionResult {
-  submissionId: string;
-  status: 'needs_parent_review';
-  duplicateDetected: boolean;
-  message: string;
-}
-
-async function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  const tryType = async (type: string, quality?: number) =>
-    new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, quality));
-
-  const webp = await tryType('image/webp', 0.82);
-  if (webp) return webp;
-
-  const jpeg = await tryType('image/jpeg', 0.86);
-  if (jpeg) return jpeg;
-
-  throw new Error('לא ניתן לעבד את התמונה במכשיר זה');
-}
-
-async function loadImage(file: File): Promise<ImageBitmap | HTMLImageElement> {
-  if ('createImageBitmap' in window) {
-    try {
-      return await createImageBitmap(file, { imageOrientation: 'from-image' });
-    } catch {
-      // Fallback below covers older Android WebViews/codecs.
-    }
-  }
-
-  const url = URL.createObjectURL(file);
-  try {
-    const image = new Image();
-    image.decoding = 'async';
-    image.src = url;
-    await image.decode();
-    return image;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-export async function normalizeEvidenceImage(file: File, maxEdge = 1600): Promise<Blob> {
-  if (!file.type.startsWith('image/')) throw new Error('יש לבחור תמונה תקינה');
-
-  const source = await loadImage(file);
-  const sourceWidth = source.width;
-  const sourceHeight = source.height;
-  if (!sourceWidth || !sourceHeight) throw new Error('לא ניתן לקרוא את ממדי התמונה');
-
-  const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
-  const width = Math.max(1, Math.round(sourceWidth * scale));
-  const height = Math.max(1, Math.round(sourceHeight * scale));
-
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d', { alpha: false });
-  if (!ctx) throw new Error('לא ניתן לעבד את התמונה');
-
-  ctx.drawImage(source as CanvasImageSource, 0, 0, width, height);
-  if ('close' in source && typeof (source as ImageBitmap).close === 'function') {
-    (source as ImageBitmap).close();
-  }
-
-  // Re-encoding through Canvas strips EXIF/GPS metadata before upload.
-  return canvasToBlob(canvas);
-}
-
-export async function sha256Blob(blob: Blob): Promise<string> {
-  const buffer = await blob.arrayBuffer();
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', buffer));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-export async function submitImageEvidence(params: {
-  taskInstanceId: string;
-  file: File;
-  mediaSource: EvidenceMediaSource;
-  note?: string;
-}): Promise<EvidenceSubmissionResult & { clientSha256: string }> {
-  const normalized = await normalizeEvidenceImage(params.file);
-  const clientSha256 = await sha256Blob(normalized);
-  const mediaKind: EvidenceMediaKind = params.mediaSource === 'gallery_upload' ? 'screenshot' : 'image';
-
-  const started = await apiRequest<{
-    submissionId: string;
-  }>('/api/child/evidence/start', {
-    method: 'POST',
-    body: JSON.stringify({
-      taskInstanceId: params.taskInstanceId,
-      mediaKind,
-      mediaSource: params.mediaSource,
-      note: params.note || null,
-      clientSha256,
-    }),
-  });
-
-  await apiUpload(`/api/child/evidence/${started.submissionId}/asset/normalized`, normalized, {
-    contentType: normalized.type,
-  });
-
-  const result = await apiRequest<EvidenceSubmissionResult>(
-    `/api/child/evidence/${started.submissionId}/complete`,
-    { method: 'POST', body: JSON.stringify({}) }
-  );
-
-  return { ...result, clientSha256 };
-}
+export type EvidenceMediaKind = 'image' | 'screenshot' | 'video';
+export interface EvidenceSubmissionResult { submissionId:string; status:'pending_ai'|'needs_parent_review'|'ai_unavailable'|'verified'|'rejected_by_ai'; duplicateDetected:boolean; message:string; }
+async function canvasToBlob(canvas:HTMLCanvasElement,quality=.82):Promise<Blob>{ const f=(t:string,q?:number)=>new Promise<Blob|null>(r=>canvas.toBlob(r,t,q)); const w=await f('image/webp',quality); if(w)return w; const j=await f('image/jpeg',Math.min(.88,quality+.04)); if(j)return j; throw new Error('לא ניתן לעבד את המדיה במכשיר זה'); }
+async function loadImage(file:File):Promise<ImageBitmap|HTMLImageElement>{ if('createImageBitmap' in window){try{return await createImageBitmap(file,{imageOrientation:'from-image'});}catch{}} const u=URL.createObjectURL(file); try{const i=new Image();i.decoding='async';i.src=u;await i.decode();return i;}finally{URL.revokeObjectURL(u)} }
+export async function normalizeEvidenceImage(file:File,maxEdge=1600):Promise<Blob>{ if(!file.type.startsWith('image/'))throw new Error('יש לבחור תמונה תקינה'); const src=await loadImage(file), sw=src.width, sh=src.height; if(!sw||!sh)throw new Error('לא ניתן לקרוא את ממדי התמונה'); const scale=Math.min(1,maxEdge/Math.max(sw,sh)), w=Math.max(1,Math.round(sw*scale)),h=Math.max(1,Math.round(sh*scale)); const c=document.createElement('canvas');c.width=w;c.height=h;const x=c.getContext('2d',{alpha:false});if(!x)throw new Error('לא ניתן לעבד את התמונה');x.drawImage(src as CanvasImageSource,0,0,w,h);if('close' in src && typeof (src as ImageBitmap).close==='function')(src as ImageBitmap).close();return canvasToBlob(c); }
+export async function sha256Blob(blob:Blob):Promise<string>{const d=new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()));return Array.from(d,b=>b.toString(16).padStart(2,'0')).join('');}
+async function waitMeta(v:HTMLVideoElement){if(v.readyState>=1&&Number.isFinite(v.duration))return;await new Promise<void>((res,rej)=>{const t=setTimeout(()=>rej(new Error('לא ניתן לקרוא את הווידאו')),10000);v.addEventListener('loadedmetadata',()=>{clearTimeout(t);res()},{once:true});v.addEventListener('error',()=>{clearTimeout(t);rej(new Error('פורמט הווידאו אינו נתמך במכשיר זה'))},{once:true});});}
+async function seek(v:HTMLVideoElement,time:number){if(Math.abs(v.currentTime-time)<.03&&v.readyState>=2)return;await new Promise<void>((res,rej)=>{const t=setTimeout(()=>rej(new Error('לא ניתן לדגום את הווידאו')),8000);v.addEventListener('seeked',()=>{clearTimeout(t);res()},{once:true});try{v.currentTime=Math.max(0,Math.min(time,Math.max(0,v.duration-.02)))}catch(e){clearTimeout(t);rej(e)}});}
+export async function extractVideoEvidence(file:File):Promise<{contactSheet:Blob;keyframes:Blob[];duration:number}>{ if(!file.type.startsWith('video/'))throw new Error('יש לבחור קובץ וידאו תקין'); if(file.size>25*1024*1024)throw new Error('הווידאו גדול מ-25MB'); const u=URL.createObjectURL(file),v=document.createElement('video');v.preload='metadata';v.muted=true;v.playsInline=true;v.src=u;try{await waitMeta(v);const duration=Number(v.duration);if(!Number.isFinite(duration)||duration<=0)throw new Error('לא ניתן לקרוא את משך הווידאו');if(duration>30.25)throw new Error('אפשר לשלוח וידאו באורך של עד 30 שניות');const sw=v.videoWidth||1280,sh=v.videoHeight||720,cw=400,ch=Math.max(220,Math.round(cw*sh/sw)),sheet=document.createElement('canvas');sheet.width=cw*2;sheet.height=ch*4;const ctx=sheet.getContext('2d',{alpha:false});if(!ctx)throw new Error('לא ניתן לעבד את הווידאו');const times=Array.from({length:8},(_,i)=>duration<=.2?0:duration*i/7),keys=new Set([0,3,7]),frames:Blob[]=[];for(let i=0;i<8;i++){await seek(v,times[i]);const col=i%2,row=Math.floor(i/2);ctx.drawImage(v,col*cw,row*ch,cw,ch);ctx.fillStyle='rgba(0,0,0,.65)';ctx.fillRect(col*cw+6,row*ch+ch-32,92,26);ctx.fillStyle='#fff';ctx.font='16px sans-serif';ctx.fillText(`${times[i].toFixed(1)}s`,col*cw+12,row*ch+ch-13);if(keys.has(i)){const f=document.createElement('canvas'),scale=Math.min(1,1280/sw);f.width=Math.max(1,Math.round(sw*scale));f.height=Math.max(1,Math.round(sh*scale));f.getContext('2d',{alpha:false})?.drawImage(v,0,0,f.width,f.height);frames.push(await canvasToBlob(f,.84));}}return{contactSheet:await canvasToBlob(sheet,.82),keyframes:frames,duration};}finally{URL.revokeObjectURL(u);v.removeAttribute('src');v.load();}}
+async function complete(id:string){return apiRequest<EvidenceSubmissionResult>(`/api/child/evidence/${id}/complete`,{method:'POST',body:JSON.stringify({})});}
+export async function submitImageEvidence(p:{taskInstanceId:string;file:File;mediaSource:EvidenceMediaSource;note?:string}){const normalized=await normalizeEvidenceImage(p.file),clientSha256=await sha256Blob(normalized),mediaKind:EvidenceMediaKind=p.mediaSource==='gallery_upload'?'screenshot':'image';const st=await apiRequest<{submissionId:string}>('/api/child/evidence/start',{method:'POST',body:JSON.stringify({taskInstanceId:p.taskInstanceId,mediaKind,mediaSource:p.mediaSource,note:p.note||null,clientSha256})});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/normalized`,normalized,{contentType:normalized.type});return{...(await complete(st.submissionId)),clientSha256};}
+export async function submitVideoEvidence(p:{taskInstanceId:string;file:File;mediaSource:EvidenceMediaSource;note?:string}){if(p.file.size>25*1024*1024)throw new Error('הווידאו גדול מ-25MB');const ex=await extractVideoEvidence(p.file);const st=await apiRequest<{submissionId:string}>('/api/child/evidence/start',{method:'POST',body:JSON.stringify({taskInstanceId:p.taskInstanceId,mediaKind:'video',mediaSource:p.mediaSource,note:p.note||null})});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/original`,p.file,{contentType:p.file.type||'video/mp4'});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/contact_sheet`,ex.contactSheet,{contentType:ex.contactSheet.type});for(const f of ex.keyframes)await apiUpload(`/api/child/evidence/${st.submissionId}/asset/keyframe`,f,{contentType:f.type});return{...(await complete(st.submissionId)),duration:ex.duration};}

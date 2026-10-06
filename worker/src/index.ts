@@ -1001,6 +1001,11 @@ export default {
         const taskKind = body.taskKind === 'mandatory' ? 'mandatory' : 'bonus';
         const assignedChildIds = Array.isArray(body.assignedChildIds) ? body.assignedChildIds : [];
         const requiresPhoto = body.requiresPhoto ? 1 : 0;
+        const verificationMode = body.verificationMode === 'ai_media' ? 'ai_media' : 'manual';
+        const verificationRulesJson = verificationMode === 'ai_media' ? JSON.stringify(body.verificationRules && typeof body.verificationRules === 'object' ? body.verificationRules : {}) : null;
+        const allowVideoProof = body.allowVideoProof ? 1 : 0;
+        const autoApproveEnabled = verificationMode === 'ai_media' && body.autoApproveEnabled ? 1 : 0;
+        const maxDailyAutoAwards = body.maxDailyAutoAwards === null || body.maxDailyAutoAwards === undefined ? null : Math.max(1, Math.min(50, Number(body.maxDailyAutoAwards) || 1));
         const oneTimeDate = body.oneTimeDate || null;
         const timeWindowStart = body.timeWindowStart || null;
         const timeWindowEnd = body.timeWindowEnd || null;
@@ -1037,11 +1042,13 @@ export default {
           `INSERT INTO task_templates (
             id, family_id, title, description, reward_minutes, schedule_type, days_of_week,
             time_window_start, time_window_end, requires_photo, task_kind, one_time_date,
+            verification_mode, verification_rules_json, allow_video_proof, auto_approve_enabled, max_daily_auto_awards,
             is_active, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
         ).bind(
           templateId, user.familyId, title, description, rewardMinutes, scheduleType, daysOfWeek,
-          timeWindowStart, timeWindowEnd, requiresPhoto, taskKind, oneTimeDate, now, now
+          timeWindowStart, timeWindowEnd, requiresPhoto, taskKind, oneTimeDate,
+          verificationMode, verificationRulesJson, allowVideoProof, autoApproveEnabled, maxDailyAutoAwards, now, now
         ).run();
 
         let targets = assignedChildIds;
@@ -1069,6 +1076,11 @@ export default {
         const scheduleType = body.scheduleType ? String(body.scheduleType) : undefined;
         const taskKind = body.taskKind ? (body.taskKind === 'mandatory' ? 'mandatory' : 'bonus') : undefined;
         const assignedChildIds = Array.isArray(body.assignedChildIds) ? body.assignedChildIds : null;
+        const verificationMode = body.verificationMode !== undefined ? (body.verificationMode === 'ai_media' ? 'ai_media' : 'manual') : undefined;
+        const verificationRulesJson = body.verificationRules !== undefined ? JSON.stringify(body.verificationRules && typeof body.verificationRules === 'object' ? body.verificationRules : {}) : undefined;
+        const allowVideoProof = body.allowVideoProof !== undefined ? (body.allowVideoProof ? 1 : 0) : undefined;
+        const autoApproveEnabled = body.autoApproveEnabled !== undefined ? (body.autoApproveEnabled ? 1 : 0) : undefined;
+        const maxDailyAutoAwards = body.maxDailyAutoAwards !== undefined ? (body.maxDailyAutoAwards === null ? null : Math.max(1, Math.min(50, Number(body.maxDailyAutoAwards) || 1))) : undefined;
         const oneTimeDate = body.oneTimeDate !== undefined ? body.oneTimeDate || null : undefined;
         const timeWindowStart = body.timeWindowStart !== undefined ? body.timeWindowStart || null : undefined;
         const timeWindowEnd = body.timeWindowEnd !== undefined ? body.timeWindowEnd || null : undefined;
@@ -1117,23 +1129,17 @@ export default {
              days_of_week=?,
              time_window_start=?,
              time_window_end=?,
-             task_kind=?,
-             one_time_date=?,
-             updated_at=?
+             task_kind=?, one_time_date=?, verification_mode=?, verification_rules_json=?, allow_video_proof=?, auto_approve_enabled=?, max_daily_auto_awards=?, updated_at=?
            WHERE id=? AND family_id=?`
         ).bind(
-          title || null,
-          description !== undefined ? description : current.description,
-          rewardMinutes ?? null,
-          nextSchedule,
-          daysOfWeek,
-          nextStart || null,
-          nextEnd || null,
-          taskKind || current.task_kind || 'bonus',
-          nextDate || null,
-          now,
-          templateId,
-          user.familyId
+          title || null, description !== undefined ? description : current.description, rewardMinutes ?? null,
+          nextSchedule, daysOfWeek, nextStart || null, nextEnd || null, taskKind || current.task_kind || 'bonus', nextDate || null,
+          verificationMode ?? current.verification_mode ?? 'manual',
+          verificationRulesJson !== undefined ? verificationRulesJson : current.verification_rules_json,
+          allowVideoProof ?? Number(current.allow_video_proof || 0),
+          autoApproveEnabled ?? Number(current.auto_approve_enabled || 0),
+          maxDailyAutoAwards !== undefined ? maxDailyAutoAwards : current.max_daily_auto_awards,
+          now, templateId, user.familyId
         ).run();
 
         if (assignedChildIds) {
