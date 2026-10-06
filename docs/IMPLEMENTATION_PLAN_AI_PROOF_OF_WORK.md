@@ -1,8 +1,8 @@
 # Time+ AI Proof-of-Work — Implementation Plan
 
-Status: APPROVED DESIGN / READY FOR IMPLEMENTATION
+Status: IMPLEMENTED / DEPLOYED IN SHADOW MODE — FINAL LIVE VISION E2E AND SIGNED PLAY AAB PENDING EXTERNAL BLOCKERS
 Date: 2026-10-05
-Scope: Time+ web + Cloudflare Worker + D1 + R2 + Yaniv Free LLM Router
+Scope: Time+ web + Cloudflare Worker + D1 + private Workers KV + Yaniv Free LLM Router
 Primary constraint: remain $0 by design and fail closed to parent review rather than paid inference.
 
 ## 1. Goal
@@ -501,3 +501,32 @@ The feature is complete only when:
 - expired media is deleted while historical metadata remains,
 - Academy integration and screen-time timer remain regression-clean,
 - production QA passes on the existing Android APK and web app.
+
+
+## 20. Verified implementation status — 2026-10-06
+
+The design above is retained as historical intent. The deployed implementation differs in these verified ways:
+
+- Phase A + B/C code is merged to `main` via PR #18; merge commit `9f5e5259c37334fa80eec248d7f392ed6c638f62`.
+- Production Pages deployment for that commit succeeded.
+- Production Worker version 43 (`42ac0e25-50e4-4e9d-89be-dcd7a593bbc9`) is deployed at 100% traffic; deployment id `572e11ca-27f2-4d09-a02b-480d499aee37`.
+- Evidence storage uses private Workers KV (`timeplus-evidence`) because R2 activation was account-gated. No paid R2 path is enabled.
+- Evidence retention is 14 days after review resolution for images, screenshots and original short video. Pending/disputed evidence is held until resolution, then receives the 14-day window. Metadata/audit remain.
+- `FREE_ROUTER` is a service binding to the deployed Yaniv Free LLM Router. Time+ uses a dedicated secret service token; the primary router token is not exposed to Time+.
+- `AI_EVIDENCE_MODE=shadow` remains the production setting. AI results can be recorded for parent review, but automatic minute awards are not enabled globally.
+- The deterministic auto-approval code is present, but permits only explicit `educational_result_screenshot` tasks, only gallery screenshots, only when all required checks pass, no duplicate/risk/suspicion exists, template auto-approval is enabled, and the daily cap passes. Camera photos and video are never auto-approved.
+- Direct OpenRouter fallback is coded only as `openrouter/free` and only when a separate `OPENROUTER_API_KEY` secret exists; no paid fallback is configured.
+- Video V1 is implemented: <=30 seconds, <=25 MB, original private evidence + 2x4 contact sheet + keyframes; AI receives the image derivatives rather than requiring native video-capable routing.
+- Android 1.0.4 / versionCode 5 adds reliable WebView camera and video capture using FileProvider + `ACTION_IMAGE_CAPTURE` / `ACTION_VIDEO_CAPTURE`.
+- CI on PR #18 passed: CI, Pages Migration Smoke, Pre-Release Gate and Android Runtime QA. Android Runtime QA built, installed and launched the app on an Android 35 emulator successfully.
+- Pre-release Android artifact `timeplus-1.0.4-pre-release` was produced by the green pre-release workflow.
+- A signed Play AAB cannot currently be produced because the repository does not contain the required GitHub Actions signing secrets: `TIMEPLUS_UPLOAD_KEYSTORE_B64`, `TIMEPLUS_KEYSTORE_PASSWORD`, `TIMEPLUS_KEY_ALIAS`, and `TIMEPLUS_KEY_PASSWORD`. Do not generate a replacement upload key without verifying it matches the Play Console app.
+- A production-safe synthetic AI E2E harness was prepared, but the available connector safety layer blocked the isolated D1 fixture write / invocation path. Therefore a real Time+ media request has not yet proven the actual live Vision provider/model response. For that reason production remains in shadow mode and auto-approval must not be enabled yet.
+- The temporary QA Worker used while attempting this E2E was deleted, and D1 was verified to contain no `qa_ai_*` / `qa_other_*` test family/child rows; `PRAGMA foreign_key_check` returned no rows.
+
+### Remaining hard blockers before declaring the original goal fully complete
+
+1. Run one real controlled evidence submission through production Time+ and confirm the recorded `verification_provider`, `verification_model`, strict structured checks, and fail-closed behavior. Only after that proof may `AI_EVIDENCE_MODE` be considered for `auto`.
+2. Configure the existing Play upload signing credentials as GitHub Actions secrets (or upload the correctly signed 1.0.4 bundle by another trusted signing path). The signing key must match the existing Play Console app.
+
+Until both are resolved, the safe production state is: full evidence feature deployed, AI in Shadow Mode, parent remains final approver, no paid inference path, and Android 1.0.4 code built/tested but not available as a signed Play AAB.
