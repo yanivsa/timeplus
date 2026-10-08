@@ -29,3 +29,40 @@ CREATE TABLE IF NOT EXISTS external_reward_claims (
 
 CREATE INDEX IF NOT EXISTS idx_external_reward_claims_submission
   ON external_reward_claims (submission_id);
+
+-- Existing repeatable-instance creation paths may have used column defaults instead
+-- of copying the template's AI verification snapshot. Repair open instances first.
+UPDATE task_instances
+SET verification_mode = (SELECT verification_mode FROM task_templates WHERE id = task_instances.template_id),
+    verification_rules_json = (SELECT verification_rules_json FROM task_templates WHERE id = task_instances.template_id),
+    allow_video_proof = (SELECT allow_video_proof FROM task_templates WHERE id = task_instances.template_id),
+    auto_approve_enabled = (SELECT auto_approve_enabled FROM task_templates WHERE id = task_instances.template_id),
+    max_daily_auto_awards = (SELECT max_daily_auto_awards FROM task_templates WHERE id = task_instances.template_id)
+WHERE template_id IS NOT NULL
+  AND verification_mode = 'manual'
+  AND EXISTS (
+    SELECT 1 FROM task_templates
+    WHERE task_templates.id = task_instances.template_id
+      AND task_templates.verification_mode = 'ai_media'
+  );
+
+-- Keep future repeatable instances aligned without changing normal instances that
+-- already carry an explicit verification snapshot.
+CREATE TRIGGER IF NOT EXISTS trg_task_instances_inherit_ai_verification
+AFTER INSERT ON task_instances
+WHEN NEW.template_id IS NOT NULL
+  AND NEW.verification_mode = 'manual'
+  AND EXISTS (
+    SELECT 1 FROM task_templates
+    WHERE task_templates.id = NEW.template_id
+      AND task_templates.verification_mode = 'ai_media'
+  )
+BEGIN
+  UPDATE task_instances
+  SET verification_mode = (SELECT verification_mode FROM task_templates WHERE id = NEW.template_id),
+      verification_rules_json = (SELECT verification_rules_json FROM task_templates WHERE id = NEW.template_id),
+      allow_video_proof = (SELECT allow_video_proof FROM task_templates WHERE id = NEW.template_id),
+      auto_approve_enabled = (SELECT auto_approve_enabled FROM task_templates WHERE id = NEW.template_id),
+      max_daily_auto_awards = (SELECT max_daily_auto_awards FROM task_templates WHERE id = NEW.template_id)
+  WHERE id = NEW.id;
+END;
