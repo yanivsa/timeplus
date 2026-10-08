@@ -148,3 +148,31 @@ test('routes an existing educational screenshot task to Haprofessor only when it
     rewardPolicy: 'correct_answers',
   }, { title: 'כל כותרת', description: '' }), true);
 });
+
+test('golden Professor score examples always award exactly the correct-answer count', () => {
+  const examples = [
+    { correct: 10, total: 10, percent: 100 },
+    { correct: 19, total: 26, percent: 73 },
+    { correct: 9, total: 10, percent: 90 },
+    { correct: 8, total: 10, percent: 80 },
+    { correct: 7, total: 10, percent: 70 },
+    { correct: 6, total: 10, percent: 60 },
+    { correct: 5, total: 10, percent: 50 },
+    { correct: 4, total: 5, percent: 80 },
+    { correct: 2, total: 5, percent: 40 },
+    { correct: 7, total: 8, percent: 87 },
+  ];
+  examples.forEach(({ correct, total, percent }, i) => {
+    const result = evaluateHaprofessorExtraction(extraction({
+      visibleUrl: `https://online.haprofessor.com/exams/13/${5000000 + i}/summary`,
+      resultText: `ענית נכון על ${correct} שאלות מתוך ${total} שאלות`,
+      successRateText: `שיעור הצלחה ${percent}%`,
+      correctAnswers: correct,
+      totalQuestions: total,
+      displayedPercentage: percent,
+      subjectBreakdown: [{ name: 'golden', correct, total }],
+    }));
+    assert.equal(result.decision, 'verified', `${correct}/${total} should verify`);
+    assert.equal(result.minutesToAward, correct, `${correct}/${total} must award ${correct}, not ${total}`);
+  });
+});
