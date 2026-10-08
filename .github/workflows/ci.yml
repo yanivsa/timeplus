@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test approval metadata UI contract
+        run: node --test web/tests/approval-metadata.test.mjs
+
       - name: Build Web Frontend
         run: npm run build:web
 
