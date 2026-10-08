@@ -56,6 +56,7 @@ const formatPendingAge = (iso?: string | null): string => {
   if (diffDays < 7) return diffDays === 1 ? 'לפני יום' : `לפני ${diffDays} ימים`;
 
   return new Date(timestamp).toLocaleString('he-IL', {
+    timeZone: 'Asia/Jerusalem',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -1234,6 +1235,7 @@ export const ParentDashboard: React.FC = () => {
                   <tr key={tx.id} className="hover:bg-purple-950/20 transition">
                     <td className="p-3 text-purple-400/80 whitespace-nowrap">
                       {new Date(tx.created_at).toLocaleString('he-IL', {
+                        timeZone: 'Asia/Jerusalem',
                         month: 'numeric',
                         day: 'numeric',
                         hour: '2-digit',
@@ -2095,6 +2097,7 @@ export const ParentDashboard: React.FC = () => {
                               <div className="font-bold text-xs text-white">{tx.reason || (isEarn ? 'הרוויח דקות' : 'ניצול דקות מסך')}</div>
                               <div className="text-[10px] text-purple-400/70 mt-0.5">
                                 {new Date(tx.created_at).toLocaleString('he-IL', {
+                                  timeZone: 'Asia/Jerusalem',
                                   month: 'numeric',
                                   day: 'numeric',
                                   hour: '2-digit',
@@ -2182,6 +2185,7 @@ export const ParentDashboard: React.FC = () => {
                           </div>
                           <div className="text-[10px] text-purple-400/70 mt-0.5">
                             {new Date(req.requested_at).toLocaleString('he-IL', {
+                              timeZone: 'Asia/Jerusalem',
                               month: 'numeric',
                               day: 'numeric',
                               hour: '2-digit',

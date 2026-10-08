@@ -959,10 +959,11 @@ export const ChildDashboard: React.FC = () => {
                       <span className="font-bold text-purple-100 block">{tx.reason || 'פעולה'}</span>
                       <span className="text-[10px] text-purple-400/60">
                         {new Date(tx.created_at).toLocaleTimeString('he-IL', {
+                          timeZone: 'Asia/Jerusalem',
                           hour: '2-digit',
                           minute: '2-digit',
                         })}{' '}
-                        • {new Date(tx.created_at).toLocaleDateString('he-IL')}
+                        • {new Date(tx.created_at).toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' })}
                       </span>
                     </div>
 

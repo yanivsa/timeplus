@@ -27,6 +27,9 @@ jobs:
       - name: Test approval metadata UI contract
         run: node --test web/tests/approval-metadata.test.mjs
 
+      - name: Test Israel timezone UI contract
+        run: node --test web/tests/israel-timezone.test.mjs
+
       - name: Build Web Frontend
         run: npm run build:web
 
