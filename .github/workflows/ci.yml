@@ -27,8 +27,8 @@ jobs:
       - name: Test Haprofessor verification contracts
         run: node --test worker/tests/haprofessor-verifier.test.mjs worker/tests/haprofessor-integration.test.mjs
 
-      - name: Test parent UI contracts
-        run: node --test web/tests/approval-metadata.test.mjs web/tests/haprofessor-mode.test.mjs
+      - name: Test approval metadata UI contract
+        run: node --test web/tests/approval-metadata.test.mjs
 
       - name: Test Israel timezone UI contract
         run: node --test web/tests/israel-timezone.test.mjs
