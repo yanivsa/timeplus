@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const ai = readFileSync(new URL('../src/ai-verification.ts', import.meta.url), 'utf8');
-const tasks = readFileSync(new URL('../src/tasks.ts', import.meta.url), 'utf8');
 const migration = readFileSync(new URL('../migrations/0007_haprofessor_exam_verification.sql', import.meta.url), 'utf8');
 
 test('Haprofessor awards use extracted correct answers as the server-side custom reward', () => {
@@ -12,11 +11,11 @@ test('Haprofessor awards use extracted correct answers as the server-side custom
   assert.match(ai, /approveTask\([^)]*minutesToAward/s, 'auto approval must use extracted correct-answer minutes');
 });
 
-test('duplicate protection is keyed by child, provider and external exam ID', () => {
+test('duplicate protection is keyed by child, provider and external exam ID at the auto-award boundary', () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS external_reward_claims/i);
   assert.match(migration, /PRIMARY KEY\s*\(\s*provider\s*,\s*child_id\s*,\s*external_reference_id\s*\)/i);
-  assert.match(tasks, /external_reward_claims/);
-  assert.match(tasks, /INSERT OR IGNORE INTO external_reward_claims/i);
+  assert.match(ai, /INSERT OR IGNORE INTO external_reward_claims/i);
+  assert.match(ai, /duplicate_exam_id/);
 });
 
 test('submission stores extracted exam metadata for audit and review', () => {
@@ -32,4 +31,12 @@ test('submission stores extracted exam metadata for audit and review', () => {
     assert.match(migration, new RegExp(`ADD COLUMN ${column}\\b`, 'i'), `missing ${column}`);
     assert.match(ai, new RegExp(column), `AI verifier does not persist ${column}`);
   }
+});
+
+test('repeatable task instances inherit AI verification settings from their template', () => {
+  assert.match(migration, /CREATE TRIGGER IF NOT EXISTS trg_task_instances_inherit_ai_verification/i);
+  assert.match(migration, /AFTER INSERT ON task_instances/i);
+  assert.match(migration, /NEW\.verification_mode\s*=\s*'manual'/i);
+  assert.match(migration, /UPDATE task_instances/i);
+  assert.match(migration, /verification_rules_json\s*=\s*\(SELECT verification_rules_json FROM task_templates/i);
 });
