@@ -33,6 +33,11 @@ jobs:
       - name: Test Israel timezone UI contract
         run: node --test web/tests/israel-timezone.test.mjs
 
+      - name: Validate D1 migrations locally
+        run: |
+          cd worker
+          npx wrangler d1 migrations apply timeplus-db --local --persist-to ../.wrangler-test
+
       - name: Build Web Frontend
         run: npm run build:web
 
