@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const ai = readFileSync(new URL('../src/ai-verification.ts', import.meta.url), 'utf8');
 const migration = readFileSync(new URL('../migrations/0007_haprofessor_exam_verification.sql', import.meta.url), 'utf8');
+const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
 
 test('Haprofessor awards use extracted correct answers as the server-side custom reward', () => {
   assert.match(ai, /haprofessor_exam_result/, 'specialized Haprofessor route is missing');
@@ -39,4 +40,15 @@ test('repeatable task instances inherit AI verification settings from their temp
   assert.match(migration, /NEW\.verification_mode\s*=\s*'manual'/i);
   assert.match(migration, /UPDATE task_instances/i);
   assert.match(migration, /verification_rules_json\s*=\s*\(SELECT verification_rules_json FROM task_templates/i);
+});
+
+test('existing Professor templates are explicitly configured for dynamic correct-answer rewards', () => {
+  assert.match(migration, /UPDATE task_templates[\s\S]*haprofessor_exam_result/i);
+  assert.match(migration, /provider[^\n]{0,80}haprofessor/i);
+  assert.match(migration, /rewardPolicy[^\n]{0,80}correct_answers/i);
+  assert.match(migration, /auto_approve_enabled\s*=\s*1/i);
+});
+
+test('production AI evidence mode performs eligible auto approvals', () => {
+  assert.match(wrangler, /AI_EVIDENCE_MODE\s*=\s*"auto"/);
 });
