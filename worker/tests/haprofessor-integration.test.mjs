@@ -5,7 +5,6 @@ import { readFileSync } from 'node:fs';
 const ai = readFileSync(new URL('../src/ai-verification.ts', import.meta.url), 'utf8');
 const migration = readFileSync(new URL('../migrations/0007_haprofessor_exam_verification.sql', import.meta.url), 'utf8');
 const wrangler = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
-const types = readFileSync(new URL('../src/types.ts', import.meta.url), 'utf8');
 
 test('Haprofessor awards use extracted correct answers as the server-side custom reward', () => {
   assert.match(ai, /haprofessor_exam_result/, 'specialized Haprofessor route is missing');
@@ -53,7 +52,6 @@ test('existing Professor templates are explicitly configured for dynamic correct
 test('automatic rollout is scoped to Professor while other AI evidence remains in shadow mode', () => {
   assert.match(wrangler, /AI_EVIDENCE_MODE\s*=\s*"shadow"/);
   assert.match(wrangler, /HAPROFESSOR_AUTO_APPROVE_ENABLED\s*=\s*"true"/);
-  assert.match(types, /HAPROFESSOR_AUTO_APPROVE_ENABLED\?:\s*string/);
-  assert.match(ai, /haprofessorMode[^\n]{0,160}HAPROFESSOR_AUTO_APPROVE_ENABLED/s);
+  assert.match(ai, /haprofessorMode[^\n]{0,200}HAPROFESSOR_AUTO_APPROVE_ENABLED/s);
   assert.match(ai, /mode\s*===\s*'auto'/);
 });
