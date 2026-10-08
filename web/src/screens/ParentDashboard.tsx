@@ -40,6 +40,30 @@ import {
 } from 'lucide-react';
 import { NotificationBell } from '../components/NotificationBell';
 
+const formatPendingAge = (iso?: string | null): string => {
+  if (!iso) return 'זמן לא ידוע';
+  const timestamp = new Date(iso).getTime();
+  if (Number.isNaN(timestamp)) return 'זמן לא ידוע';
+
+  const diffMinutes = Math.max(0, Math.floor((Date.now() - timestamp) / 60_000));
+  if (diffMinutes < 1) return 'עכשיו';
+  if (diffMinutes < 60) return `לפני ${diffMinutes} דק׳`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `לפני ${diffHours} שע׳`;
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) return diffDays === 1 ? 'לפני יום' : `לפני ${diffDays} ימים`;
+
+  return new Date(timestamp).toLocaleString('he-IL', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 export const ParentDashboard: React.FC = () => {
   const { user, logout, familyName } = useAuth();
   const weekDays = [
@@ -59,6 +83,7 @@ export const ParentDashboard: React.FC = () => {
   const [activeScreenSessions, setActiveScreenSessions] = useState<any[]>([]);
   const [pendingTasks, setPendingTasks] = useState<PendingApprovalItem[]>([]);
   const [pendingRequests, setPendingRequests] = useState<ScreenTimeRequestItem[]>([]);
+  const [evidenceTaskIds, setEvidenceTaskIds] = useState<Set<string>>(new Set());
   const [templates, setTemplates] = useState<TaskTemplateItem[]>([]);
   const [history, setHistory] = useState<TransactionItem[]>([]);
   const [stats, setStats] = useState<any[]>([]);
@@ -102,7 +127,7 @@ export const ParentDashboard: React.FC = () => {
   const [editDescription, setEditDescription] = useState('');
   const [editReward, setEditReward] = useState<number>(15);
   const [editSchedule, setEditSchedule] = useState<'daily' | 'weekly' | 'custom' | 'repeatable' | 'one_time'>('daily');
-  const [editKind, setEditKind] = useState<'bonus' | 'mandatory'>('bonus');
+  const [editKind, setEditKind] = useState<'mandatory' | 'bonus'>('bonus');
   const [editDays, setEditDays] = useState<number[]>([0, 1, 2, 3, 4]);
   const [editOneTimeDate, setEditOneTimeDate] = useState('');
   const [editTimeStart, setEditTimeStart] = useState('');
@@ -133,6 +158,16 @@ export const ParentDashboard: React.FC = () => {
       const approvalsRes = await apiRequest('/api/parent/approvals');
       setPendingTasks(approvalsRes.pendingTasks || []);
       setPendingRequests(approvalsRes.pendingRequests || []);
+
+      try {
+        const evidenceRes = await apiRequest('/api/parent/evidence?limit=100');
+        const pendingEvidenceTaskIds = (evidenceRes.submissions || [])
+          .filter((submission: any) => submission?.status === 'pending' && submission?.task_instance_id)
+          .map((submission: any) => String(submission.task_instance_id));
+        setEvidenceTaskIds(new Set(pendingEvidenceTaskIds));
+      } catch {
+        setEvidenceTaskIds(new Set());
+      }
     } catch (e) {
       console.error('Failed to load parent dashboard', e);
     } finally {
@@ -941,6 +976,17 @@ export const ParentDashboard: React.FC = () => {
                         {t.description && (
                           <p className="text-xs text-purple-300/70">{t.description}</p>
                         )}
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-purple-400">
+                          <span className="inline-flex items-center gap-1">
+                            <Clock className="h-3.5 w-3.5" />
+                            נשלח {formatPendingAge(t.submission_time)} · {t.task_kind === 'mandatory' ? 'משימת חובה · XP' : `${t.reward_minutes} דקות`}
+                          </span>
+                          {(Boolean(t.photo_object_key) || evidenceTaskIds.has(t.id)) && (
+                            <span className="inline-flex items-center rounded-lg border border-cyan-500/30 bg-cyan-950/40 px-2 py-0.5 font-semibold text-cyan-300">
+                              📎 תיעוד מצורף
+                            </span>
+                          )}
+                        </div>
                         {t.submission_note && (
                           <p className="mt-2 text-xs text-amber-300 bg-amber-950/30 border border-amber-500/20 p-2 rounded-xl">
                             הערת הילד: "{t.submission_note}"
@@ -1025,6 +1071,9 @@ export const ParentDashboard: React.FC = () => {
                             מבקש {r.requested_minutes} דקות עבור {r.source}
                           </span>
                         </div>
+                        <p className="text-xs text-purple-400">
+                          בקשה {formatPendingAge(r.requested_at)} · {r.requested_minutes} דקות
+                        </p>
                         <p className="text-xs text-purple-400">
                           יתרה זמינה כעת בארנק: {r.available_minutes} דקות
                         </p>
