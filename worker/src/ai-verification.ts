@@ -4,7 +4,7 @@ import {
   evaluateHaprofessorExtraction,
   HaprofessorEvaluation,
   HaprofessorModelExtraction,
-  isHaprofessorRules,
+  shouldUseHaprofessorVerifier,
 } from './haprofessor-verifier';
 import { approveTask } from './tasks';
 import { getIsraelDateString } from './timezone';
@@ -299,7 +299,7 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
   }
 
   const rules = safeJson<any>(sub.verification_rules_json, {});
-  const haprofessorMode = isHaprofessorRules(rules);
+  const haprofessorMode = shouldUseHaprofessorVerifier(rules, { title: sub.task_title, description: sub.task_description });
   const required = haprofessorMode ? HAPROFESSOR_REQUIRED_CHECKS : requiredChecksFromRules(rules);
   const prompt = haprofessorMode
     ? [
