@@ -87,6 +87,19 @@ export function isHaprofessorRules(rules: unknown): boolean {
   );
 }
 
+export function shouldUseHaprofessorVerifier(
+  rules: unknown,
+  task: { title?: string | null; description?: string | null }
+): boolean {
+  if (isHaprofessorRules(rules)) return true;
+  const value = rules as Record<string, unknown> | null;
+  if (!value || value.activityType !== 'educational_result_screenshot') return false;
+  const context = [task?.title, task?.description, typeof value.instructions === 'string' ? value.instructions : '']
+    .filter(Boolean)
+    .join(' ');
+  return /(?:haprofessor|הפרופסור|פרופסור)/i.test(context);
+}
+
 export function evaluateHaprofessorExtraction(raw: HaprofessorModelExtraction): HaprofessorEvaluation {
   const riskFlags: string[] = [];
   const checks: HaprofessorCheck[] = [];
