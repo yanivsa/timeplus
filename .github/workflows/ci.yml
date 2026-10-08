@@ -24,11 +24,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test Haprofessor verification contracts
+        run: node --test worker/tests/haprofessor-verifier.test.mjs worker/tests/haprofessor-integration.test.mjs
+
       - name: Test approval metadata UI contract
         run: node --test web/tests/approval-metadata.test.mjs
 
       - name: Test Israel timezone UI contract
         run: node --test web/tests/israel-timezone.test.mjs
+
+      - name: Validate D1 migrations locally
+        run: |
+          cd worker
+          npx wrangler d1 migrations apply timeplus-db --local --persist-to ../.wrangler-test
 
       - name: Build Web Frontend
         run: npm run build:web
