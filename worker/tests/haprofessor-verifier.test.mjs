@@ -14,7 +14,7 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const moduleShim = { exports: {} };
 new Function('module', 'exports', compiled)(moduleShim, moduleShim.exports);
-const { evaluateHaprofessorExtraction, isHaprofessorRules } = moduleShim.exports;
+const { evaluateHaprofessorExtraction, isHaprofessorRules, shouldUseHaprofessorVerifier } = moduleShim.exports;
 
 function extraction(overrides = {}) {
   return {
@@ -127,4 +127,24 @@ test('recognizes only the explicit Haprofessor dynamic-reward rule', () => {
     rewardPolicy: 'correct_answers',
   }), true);
   assert.equal(isHaprofessorRules({ activityType: 'educational_result_screenshot' }), false);
+});
+
+test('routes an existing educational screenshot task to Haprofessor only when its task context explicitly names the Professor', () => {
+  const genericRules = {
+    activityType: 'educational_result_screenshot',
+    requireScreenUi: true,
+  };
+  assert.equal(shouldUseHaprofessorVerifier(genericRules, {
+    title: 'אימוני הצלחה - הפרופסור',
+    description: '',
+  }), true);
+  assert.equal(shouldUseHaprofessorVerifier(genericRules, {
+    title: 'צילום תוצאה לימודית',
+    description: 'מבחן רגיל באפליקציה אחרת',
+  }), false);
+  assert.equal(shouldUseHaprofessorVerifier({
+    activityType: 'haprofessor_exam_result',
+    provider: 'haprofessor',
+    rewardPolicy: 'correct_answers',
+  }, { title: 'כל כותרת', description: '' }), true);
 });
