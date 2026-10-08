@@ -30,6 +30,36 @@ CREATE TABLE IF NOT EXISTS external_reward_claims (
 CREATE INDEX IF NOT EXISTS idx_external_reward_claims_submission
   ON external_reward_claims (submission_id);
 
+-- Configure an already-existing Professor task without requiring an APK/UI update.
+-- The match is deliberately narrow: the task itself must explicitly mention Professor/Haprofessor.
+UPDATE task_templates
+SET verification_mode = 'ai_media',
+    verification_rules_json = '{"activityType":"haprofessor_exam_result","provider":"haprofessor","rewardPolicy":"correct_answers","requiredChecks":["correct_activity","completion_visible","result_readable","screen_ui_visible","exam_id_readable","score_consistent"],"requireScreenUi":true,"instructions":"Read only the completed Haprofessor summary. One minute per explicitly correct answer. Never infer X from the percentage."}',
+    allow_video_proof = 0,
+    auto_approve_enabled = 1,
+    max_daily_auto_awards = NULL
+WHERE title LIKE '%פרופסור%'
+   OR title LIKE '%haprofessor%'
+   OR COALESCE(description, '') LIKE '%פרופסור%'
+   OR COALESCE(description, '') LIKE '%haprofessor%'
+   OR COALESCE(verification_rules_json, '') LIKE '%פרופסור%'
+   OR COALESCE(verification_rules_json, '') LIKE '%haprofessor%';
+
+UPDATE task_instances
+SET verification_mode = 'ai_media',
+    verification_rules_json = '{"activityType":"haprofessor_exam_result","provider":"haprofessor","rewardPolicy":"correct_answers","requiredChecks":["correct_activity","completion_visible","result_readable","screen_ui_visible","exam_id_readable","score_consistent"],"requireScreenUi":true,"instructions":"Read only the completed Haprofessor summary. One minute per explicitly correct answer. Never infer X from the percentage."}',
+    allow_video_proof = 0,
+    auto_approve_enabled = 1,
+    max_daily_auto_awards = NULL
+WHERE template_id IN (
+        SELECT id FROM task_templates
+        WHERE verification_rules_json LIKE '%"activityType":"haprofessor_exam_result"%'
+      )
+   OR title LIKE '%פרופסור%'
+   OR title LIKE '%haprofessor%'
+   OR COALESCE(description, '') LIKE '%פרופסור%'
+   OR COALESCE(description, '') LIKE '%haprofessor%';
+
 -- Existing repeatable-instance creation paths may have used column defaults instead
 -- of copying the template's AI verification snapshot. Repair open instances first.
 UPDATE task_instances
