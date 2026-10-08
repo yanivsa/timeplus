@@ -47,6 +47,8 @@ test('existing Professor templates are explicitly configured for dynamic correct
   assert.match(migration, /provider[^\n]{0,80}haprofessor/i);
   assert.match(migration, /rewardPolicy[^\n]{0,80}correct_answers/i);
   assert.match(migration, /auto_approve_enabled\s*=\s*1/i);
+  assert.match(migration, /title LIKE '%אימוני הצלחה%פרופסור%'|title = 'אימוני הצלחה בפרופסור'/i);
+  assert.doesNotMatch(migration, /description[^;]{0,240}LIKE '%פרופסור%'/i, 'a generic daily task can mention Professor in its description and must not be converted');
 });
 
 test('automatic rollout is scoped to Professor while other AI evidence remains in shadow mode', () => {
