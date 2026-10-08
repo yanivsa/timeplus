@@ -24,14 +24,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test Haprofessor verification contracts
+        run: node --test worker/tests/haprofessor-verifier.test.mjs worker/tests/haprofessor-integration.test.mjs
+
       - name: Test parent UI contracts
         run: node --test web/tests/approval-metadata.test.mjs web/tests/haprofessor-mode.test.mjs
 
       - name: Test Israel timezone UI contract
         run: node --test web/tests/israel-timezone.test.mjs
-
-      - name: Test Haprofessor verification contracts
-        run: node --test worker/tests/haprofessor-verifier.test.mjs worker/tests/haprofessor-integration.test.mjs
 
       - name: Build Web Frontend
         run: npm run build:web
