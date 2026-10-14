@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 
@@ -30,6 +31,34 @@ class TimePlusFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         super.onMessageReceived(remoteMessage)
+
+        val type = remoteMessage.data["type"].orEmpty()
+        if (type == "screen_time_up") {
+            val sessionId = remoteMessage.data["entityId"].orEmpty()
+
+            // The exact local alarm is primary. The cloud push is a safety net.
+            // If the same session already rang locally, do not ring again after
+            // the child has dismissed it.
+            if (sessionId.isNotBlank() && TimePlusUsageAlarm.wasHandled(this, sessionId)) {
+                return
+            }
+
+            val serviceIntent = Intent(this, TimePlusAlarmService::class.java).apply {
+                action = TimePlusAlarmService.ACTION_START
+                putExtra(TimePlusUsageAlarm.EXTRA_SESSION_ID, sessionId)
+            }
+
+            try {
+                ContextCompat.startForegroundService(this, serviceIntent)
+                TimePlusUsageAlarm.markHandled(this, sessionId)
+                TimePlusUsageAlarm.clearStored(this)
+                return
+            } catch (_: Exception) {
+                // Fall through to a normal high-priority notification rather than
+                // silently losing the expiry alert if Android blocks service start.
+            }
+        }
+
         createNotificationChannel()
 
         val title = remoteMessage.notification?.title
