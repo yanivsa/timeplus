@@ -2,6 +2,7 @@ package com.yanivsa.timeplus
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -14,6 +15,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.provider.Settings
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
@@ -48,6 +50,9 @@ class MainActivity : AppCompatActivity() {
             "timeplus-app.pages.dev",
             "timeplus.yanivsa.workers.dev"
         )
+        private const val EXACT_ALARM_PROMPT_PREFS = "timeplus_exact_alarm_prompt"
+        private const val KEY_LAST_EXACT_ALARM_PROMPT = "last_prompt_at"
+        private const val EXACT_ALARM_PROMPT_COOLDOWN_MS = 24 * 60 * 60 * 1000L
     }
 
     private lateinit var webView: WebView
@@ -96,7 +101,10 @@ class MainActivity : AppCompatActivity() {
         return Intent(if (wantsVideo) MediaStore.ACTION_VIDEO_CAPTURE else MediaStore.ACTION_IMAGE_CAPTURE).apply {
             putExtra(MediaStore.EXTRA_OUTPUT, uri)
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            if (wantsVideo) { putExtra(MediaStore.EXTRA_DURATION_LIMIT, 30); putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1) }
+            if (wantsVideo) {
+                putExtra(MediaStore.EXTRA_DURATION_LIMIT, 30)
+                putExtra(MediaStore.EXTRA_VIDEO_QUALITY, 1)
+            }
         }
     }
 
@@ -144,7 +152,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.4"
+        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.5"
         webView.addJavascriptInterface(NativePushBridge(this), "TimePlusAndroid")
 
         val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -156,10 +164,9 @@ class MainActivity : AppCompatActivity() {
                 val host = uri.host
 
                 if (host != null && ALLOWED_HOSTS.any { it.equals(host, ignoreCase = true) }) {
-                    return false // Let WebView load it
+                    return false
                 }
 
-                // External link: open in system browser
                 try {
                     val intent = Intent(Intent.ACTION_VIEW, uri)
                     startActivity(intent)
@@ -182,6 +189,7 @@ class MainActivity : AppCompatActivity() {
                 if (!mainFrameFailed) {
                     showWebView()
                     notifyWebOfFcmToken()
+                    installNativeUsageAlarmBridge()
                 }
             }
 
@@ -230,11 +238,22 @@ class MainActivity : AppCompatActivity() {
                 this@MainActivity.filePathCallback = filePathCallback
 
                 val intent = try {
-                    createCaptureIntent(fileChooserParams) ?: fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
+                    createCaptureIntent(fileChooserParams)
+                        ?: fileChooserParams?.createIntent()
+                        ?: Intent(Intent.ACTION_GET_CONTENT).apply { type = "image/*" }
                 } catch (e: Exception) {
-                    this@MainActivity.filePathCallback = null; pendingCaptureUri = null; return false
+                    this@MainActivity.filePathCallback = null
+                    pendingCaptureUri = null
+                    return false
                 }
-                return try { fileChooserLauncher.launch(intent); true } catch (e: Exception) { this@MainActivity.filePathCallback = null; pendingCaptureUri = null; false }
+                return try {
+                    fileChooserLauncher.launch(intent)
+                    true
+                } catch (e: Exception) {
+                    this@MainActivity.filePathCallback = null
+                    pendingCaptureUri = null
+                    false
+                }
             }
         }
     }
@@ -305,6 +324,14 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         CookieManager.getInstance().flush()
         setupFirebaseMessaging()
+        if (::webView.isInitialized) {
+            webView.post {
+                webView.evaluateJavascript(
+                    "if(window.__timePlusSyncNativeAlarm){window.__timePlusSyncNativeAlarm();}",
+                    null
+                )
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -315,8 +342,6 @@ class MainActivity : AppCompatActivity() {
             loadCurrentPath(preferPrimary = false)
         }
     }
-
-
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -374,11 +399,101 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun installNativeUsageAlarmBridge() {
+        if (!::webView.isInitialized) return
+
+        val script = """
+            (function() {
+              if (!window.TimePlusAndroid || typeof window.TimePlusAndroid.scheduleUsageAlarm !== 'function') return;
+
+              function syncPayload(payload) {
+                try {
+                  var session = payload && payload.activeSession;
+                  if (session && session.status === 'running') {
+                    var remaining = Number(session.remaining_now != null ? session.remaining_now : session.remaining_seconds);
+                    if (session.id && Number.isFinite(remaining) && remaining > 0) {
+                      window.TimePlusAndroid.scheduleUsageAlarm(
+                        Date.now() + Math.ceil(remaining * 1000),
+                        String(session.id)
+                      );
+                      return;
+                    }
+                  }
+                  window.TimePlusAndroid.cancelUsageAlarm();
+                } catch (_) {}
+              }
+
+              if (!window.__timePlusNativeAlarmInstalled) {
+                var originalFetch = window.fetch.bind(window);
+
+                window.__timePlusSyncNativeAlarm = function() {
+                  var token = null;
+                  try { token = window.sessionStorage.getItem('timeplus_token'); } catch (_) {}
+                  var headers = token ? { Authorization: 'Bearer ' + token } : {};
+                  return originalFetch('/api/child/screen-session', {
+                    credentials: 'include',
+                    headers: headers
+                  })
+                    .then(function(response) { return response.ok ? response.json() : null; })
+                    .then(syncPayload)
+                    .catch(function() {});
+                };
+
+                window.fetch = async function() {
+                  var args = Array.prototype.slice.call(arguments);
+                  var response = await originalFetch.apply(window, args);
+                  try {
+                    var input = args[0];
+                    var url = typeof input === 'string' ? input : (input && input.url) || '';
+                    if (url.indexOf('/api/child/screen-session') !== -1) {
+                      response.clone().json().then(syncPayload).catch(function() {});
+                    }
+                  } catch (_) {}
+                  return response;
+                };
+
+                window.__timePlusNativeAlarmInstalled = true;
+                window.setInterval(function() {
+                  if (window.__timePlusSyncNativeAlarm) window.__timePlusSyncNativeAlarm();
+                }, 60000);
+              }
+
+              if (window.__timePlusSyncNativeAlarm) window.__timePlusSyncNativeAlarm();
+            })();
+        """.trimIndent()
+
+        webView.post { webView.evaluateJavascript(script, null) }
+    }
+
+    private fun maybeRequestExactAlarmPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        if (alarmManager.canScheduleExactAlarms()) return
+
+        val prefs = getSharedPreferences(EXACT_ALARM_PROMPT_PREFS, MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val lastPromptAt = prefs.getLong(KEY_LAST_EXACT_ALARM_PROMPT, 0L)
+        if (now - lastPromptAt < EXACT_ALARM_PROMPT_COOLDOWN_MS) return
+
+        prefs.edit().putLong(KEY_LAST_EXACT_ALARM_PROMPT, now).apply()
+
+        runOnUiThread {
+            runCatching {
+                startActivity(
+                    Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                )
+            }
+        }
+    }
+
     private fun targetPathFromIntent(sourceIntent: Intent?): String {
         val path = (
             sourceIntent?.getStringExtra("notification_url")
                 ?: sourceIntent?.getStringExtra("url")
-        )?.trim().orEmpty()
+            )?.trim().orEmpty()
         if (path.isBlank() || !path.startsWith("/")) return "/"
         return path
     }
@@ -395,10 +510,10 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl(buildUrl(activeBaseUrl, currentPath))
     }
 
-    private class NativePushBridge(private val context: Context) {
+    private class NativePushBridge(private val activity: MainActivity) {
         @JavascriptInterface
         fun getFcmToken(): String {
-            return context
+            return activity
                 .getSharedPreferences(TimePlusFirebaseMessagingService.PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(TimePlusFirebaseMessagingService.KEY_FCM_TOKEN, "")
                 .orEmpty()
@@ -407,6 +522,19 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun getDeviceName(): String {
             return "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+        }
+
+        @JavascriptInterface
+        fun scheduleUsageAlarm(triggerAtMillis: Long, sessionId: String): Boolean {
+            if (sessionId.isBlank() || triggerAtMillis <= System.currentTimeMillis()) return false
+            val exact = TimePlusUsageAlarm.schedule(activity, triggerAtMillis, sessionId)
+            if (!exact) activity.maybeRequestExactAlarmPermission()
+            return exact
+        }
+
+        @JavascriptInterface
+        fun cancelUsageAlarm() {
+            TimePlusUsageAlarm.cancel(activity)
         }
     }
 
