@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   signed-play-aab:
-    name: Build signed Time+ 1.0.4 AAB
+    name: Build signed Time+ 1.0.5 AAB
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -51,10 +51,13 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'applicationId "com.yanivsa.timeplus"' android/app/build.gradle
-          grep -q 'versionCode 5' android/app/build.gradle
-          grep -q 'versionName "1.0.4"' android/app/build.gradle
+          grep -q 'versionCode 6' android/app/build.gradle
+          grep -q 'versionName "1.0.5"' android/app/build.gradle
           grep -q 'PRIMARY_URL = "https://timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q 'FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'TimePlusAlarmService' android/app/src/main/AndroidManifest.xml
+          grep -q 'setExactAndAllowWhileIdle' android/app/src/main/java/com/yanivsa/timeplus/TimePlusUsageAlarm.kt
+          grep -q 'AudioAttributes.USAGE_ALARM' android/app/src/main/java/com/yanivsa/timeplus/TimePlusAlarmService.kt
 
       - name: Resolve signing credentials and verify active upload certificate
         env:
@@ -140,16 +143,16 @@ jobs:
           jarsigner -verify -verbose -certs "$AAB" | tee jarsigner-verify.txt
           grep -qi 'jar verified' jarsigner-verify.txt
           unzip -l "$AAB" | grep -Eq 'META-INF/.*\.(RSA|DSA|EC)$'
-          sha256sum "$AAB" | tee timeplus-v1.0.4-release.aab.sha256
-          cp "$AAB" timeplus-v1.0.4-release.aab
+          sha256sum "$AAB" | tee timeplus-v1.0.5-release.aab.sha256
+          cp "$AAB" timeplus-v1.0.5-release.aab
 
       - name: Upload signed Play release package
         uses: actions/upload-artifact@v4
         with:
-          name: timeplus-v1.0.4-signed-play-package
+          name: timeplus-v1.0.5-signed-play-package
           path: |
-            timeplus-v1.0.4-release.aab
-            timeplus-v1.0.4-release.aab.sha256
+            timeplus-v1.0.5-release.aab
+            timeplus-v1.0.5-release.aab.sha256
             upload_certificate.pem
           if-no-files-found: error
           retention-days: 90
