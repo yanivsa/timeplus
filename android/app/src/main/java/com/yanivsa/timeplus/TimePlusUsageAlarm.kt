@@ -59,10 +59,14 @@ object TimePlusUsageAlarm {
         return exactAllowed
     }
 
+    /**
+     * Cancels only an alarm that has not fired yet. Once ringing has started,
+     * server/WebView synchronization must not silence it; the child dismisses it
+     * explicitly from the alarm notification.
+     */
     fun cancel(context: Context) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         alarmManager.cancel(firePendingIntent(context, null))
-        context.stopService(Intent(context, TimePlusAlarmService::class.java))
         clearStored(context)
     }
 
