@@ -18,6 +18,9 @@ object TimePlusUsageAlarm {
     private const val PREFS_NAME = "timeplus_usage_alarm"
     private const val KEY_SESSION_ID = "session_id"
     private const val KEY_TRIGGER_AT = "trigger_at"
+    private const val KEY_HANDLED_SESSION_ID = "handled_session_id"
+    private const val KEY_HANDLED_AT = "handled_at"
+    private const val HANDLED_TTL_MS = 24 * 60 * 60 * 1000L
 
     /**
      * Schedules the native alarm. Returns true when Android allowed an exact alarm.
@@ -71,6 +74,30 @@ object TimePlusUsageAlarm {
             .apply()
     }
 
+    /**
+     * Local AlarmManager and the server-side FCM fallback can both observe the
+     * same expiry. Remember a successfully-fired session so the fallback cannot
+     * make the phone ring a second time after the child already stopped it.
+     */
+    fun markHandled(context: Context, sessionId: String) {
+        if (sessionId.isBlank()) return
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_HANDLED_SESSION_ID, sessionId)
+            .putLong(KEY_HANDLED_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    fun wasHandled(context: Context, sessionId: String): Boolean {
+        if (sessionId.isBlank()) return false
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val handledId = prefs.getString(KEY_HANDLED_SESSION_ID, null)
+        val handledAt = prefs.getLong(KEY_HANDLED_AT, 0L)
+        return handledId == sessionId &&
+            handledAt > 0L &&
+            System.currentTimeMillis() - handledAt <= HANDLED_TTL_MS
+    }
+
     private fun firePendingIntent(context: Context, sessionId: String?): PendingIntent {
         val intent = Intent(context, TimePlusAlarmReceiver::class.java).apply {
             action = ACTION_FIRE
@@ -94,15 +121,24 @@ class TimePlusAlarmReceiver : BroadcastReceiver() {
             }
 
             TimePlusUsageAlarm.ACTION_FIRE -> {
+                val sessionId = intent.getStringExtra(TimePlusUsageAlarm.EXTRA_SESSION_ID).orEmpty()
+                if (TimePlusUsageAlarm.wasHandled(context, sessionId)) {
+                    TimePlusUsageAlarm.clearStored(context)
+                    return
+                }
+
                 val serviceIntent = Intent(context, TimePlusAlarmService::class.java).apply {
                     action = TimePlusAlarmService.ACTION_START
-                    putExtra(
-                        TimePlusUsageAlarm.EXTRA_SESSION_ID,
-                        intent.getStringExtra(TimePlusUsageAlarm.EXTRA_SESSION_ID).orEmpty()
-                    )
+                    putExtra(TimePlusUsageAlarm.EXTRA_SESSION_ID, sessionId)
                 }
-                ContextCompat.startForegroundService(context, serviceIntent)
-                TimePlusUsageAlarm.clearStored(context)
+
+                try {
+                    ContextCompat.startForegroundService(context, serviceIntent)
+                    TimePlusUsageAlarm.markHandled(context, sessionId)
+                    TimePlusUsageAlarm.clearStored(context)
+                } catch (_: Exception) {
+                    // Keep the session unhandled so the server-side FCM fallback can retry.
+                }
             }
         }
     }
