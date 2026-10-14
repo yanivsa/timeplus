@@ -11,7 +11,7 @@ on:
 
 jobs:
   release-gate:
-    name: Time+ 1.0.4 pre-release gate
+    name: Time+ 1.0.5 pre-release gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -42,16 +42,20 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Verify immutable Android release identity
+      - name: Verify Android release identity
         run: |
           set -euo pipefail
           grep -q 'applicationId "com.yanivsa.timeplus"' android/app/build.gradle
-          grep -q 'versionCode 5' android/app/build.gradle
-          grep -q 'versionName "1.0.4"' android/app/build.gradle
+          grep -q 'versionCode 6' android/app/build.gradle
+          grep -q 'versionName "1.0.5"' android/app/build.gradle
           grep -q '"package_name": "com.yanivsa.timeplus"' android/app/google-services.json
           grep -q '"project_id": "timeplus-e2f2f"' android/app/google-services.json
           grep -q 'android.permission.POST_NOTIFICATIONS' android/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.SCHEDULE_EXACT_ALARM' android/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK' android/app/src/main/AndroidManifest.xml
           grep -q 'TimePlusFirebaseMessagingService' android/app/src/main/AndroidManifest.xml
+          grep -q 'TimePlusAlarmService' android/app/src/main/AndroidManifest.xml
+          grep -q 'TimePlusAlarmReceiver' android/app/src/main/AndroidManifest.xml
 
       - name: Verify resilient origin configuration
         run: |
@@ -60,15 +64,19 @@ jobs:
           grep -q 'FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q '"timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q '"timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
-          grep -q 'TimePlusApp/1.0.4' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'TimePlusApp/1.0.5' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
 
-      - name: Verify native notification plumbing
+      - name: Verify native notification and alarm plumbing
         run: |
           set -euo pipefail
           grep -q 'putExtra("notification_url", targetUrl)' android/app/src/main/java/com/yanivsa/timeplus/TimePlusFirebaseMessagingService.kt
           grep -q 'remoteMessage.data\["url"\]' android/app/src/main/java/com/yanivsa/timeplus/TimePlusFirebaseMessagingService.kt
           grep -q 'sourceIntent?.getStringExtra("notification_url")' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q 'sourceIntent?.getStringExtra("url")' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'scheduleUsageAlarm' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'setExactAndAllowWhileIdle' android/app/src/main/java/com/yanivsa/timeplus/TimePlusUsageAlarm.kt
+          grep -q 'AudioAttributes.USAGE_ALARM' android/app/src/main/java/com/yanivsa/timeplus/TimePlusAlarmService.kt
+          grep -q 'isLooping = true' android/app/src/main/java/com/yanivsa/timeplus/TimePlusAlarmService.kt
           grep -q '/api/push/fcm-subscribe' web/src/services/nativePush.ts
           grep -q "window.addEventListener('timeplus:fcm-token'" web/src/App.tsx
           grep -q "pathname === '/api/push/fcm-subscribe'" worker/src/index.ts
@@ -121,7 +129,7 @@ jobs:
       - name: Upload unsigned QA release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: timeplus-1.0.4-pre-release
+          name: timeplus-1.0.5-pre-release
           path: |
             android/app/build/outputs/bundle/release/app-release.aab
             android/app/build/outputs/apk/release/*.apk
