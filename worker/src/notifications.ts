@@ -268,35 +268,43 @@ async function sendFcmNotifications(
 
   for (const row of tokens) {
     try {
+      // screen_time_up must be data-only so FirebaseMessagingService receives it
+      // even while the app is backgrounded. The Android client then starts the
+      // same native alarm service used by the exact local timer.
+      const fcmMessage: any = {
+        token: row.token,
+        data: {
+          notificationId,
+          type,
+          title,
+          body: message,
+          entityType: entityType || '',
+          entityId: entityId || '',
+          url: recipientRole === 'parent' ? '/parent' : '/child',
+        },
+        android: {
+          priority: 'HIGH',
+        },
+      };
+
+      if (type !== 'screen_time_up') {
+        fcmMessage.notification = {
+          title,
+          body: message,
+        };
+        fcmMessage.android.notification = {
+          channel_id: 'timeplus_updates',
+          sound: 'default',
+        };
+      }
+
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          message: {
-            token: row.token,
-            notification: {
-              title,
-              body: message,
-            },
-            data: {
-              notificationId,
-              type,
-              entityType: entityType || '',
-              entityId: entityId || '',
-              url: recipientRole === 'parent' ? '/parent' : '/child',
-            },
-            android: {
-              priority: 'HIGH',
-              notification: {
-                channel_id: 'timeplus_updates',
-                sound: 'default',
-              },
-            },
-          },
-        }),
+        body: JSON.stringify({ message: fcmMessage }),
       });
 
       if (!response.ok) {
