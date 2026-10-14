@@ -14,6 +14,12 @@ adb shell pm grant com.yanivsa.timeplus android.permission.POST_NOTIFICATIONS ||
 # and stops only after the explicit dismissal action.
 android/gradlew -p android connectedDebugAndroidTest --no-daemon
 
+# connectedDebugAndroidTest removes its installed target/test packages when it
+# finishes. Restore the debug app before continuing with the existing WebView,
+# Firebase and deep-link runtime smoke checks.
+adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+adb shell pm grant com.yanivsa.timeplus android.permission.POST_NOTIFICATIONS || true
+
 adb logcat -c
 adb shell am force-stop com.yanivsa.timeplus
 adb shell am start -W -n com.yanivsa.timeplus/.MainActivity
