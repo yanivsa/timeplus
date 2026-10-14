@@ -6,8 +6,13 @@ android/gradlew -p android assembleDebug --no-daemon
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
 
 # Prevent the Android 13+ notification permission dialog from masking the app
-# during automated runtime QA.
+# during automated runtime QA and allow alarm foreground-notification assertions.
 adb shell pm grant com.yanivsa.timeplus android.permission.POST_NOTIFICATIONS || true
+
+# Exercise the native time-up alarm itself on the emulator. This verifies that
+# the foreground alarm starts, survives a normal session-state synchronization,
+# and stops only after the explicit dismissal action.
+android/gradlew -p android connectedDebugAndroidTest --no-daemon
 
 adb logcat -c
 adb shell am force-stop com.yanivsa.timeplus
@@ -77,4 +82,4 @@ for TARGET_PATH in /child /parent; do
   grep -q "https://timeplus-app.pages.dev$TARGET_PATH" "$OUT_FILE"
 done
 
-echo 'Android runtime QA passed, including native FCM token acquisition and notification deep-link routing.'
+echo 'Android runtime QA passed, including native alarm persistence/dismissal, FCM token acquisition, and notification deep-link routing.'
