@@ -33,6 +33,9 @@ jobs:
       - name: Test Israel timezone UI contract
         run: node --test web/tests/israel-timezone.test.mjs
 
+      - name: Test task creation and repeatable-task regressions
+        run: node --test web/tests/task-creation-regression.test.mjs
+
       - name: Validate D1 migrations locally
         run: |
           cd worker
