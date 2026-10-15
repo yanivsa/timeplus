@@ -357,7 +357,11 @@ export default {
            FROM task_instances ti
            LEFT JOIN task_templates tt ON tt.id = ti.template_id
            LEFT JOIN task_submissions ts ON ts.task_instance_id = ti.id AND ts.status = 'pending'
-           WHERE ti.child_id = ? AND (ti.due_date = ? OR ti.status = 'submitted')
+           WHERE ti.child_id = ? AND (
+             ti.due_date = ?
+             OR ti.status = 'submitted'
+             OR (tt.schedule_type = 'repeatable' AND ti.status IN ('open','rejected'))
+           )
            ORDER BY 
              CASE ti.status 
                WHEN 'open' THEN 1 
@@ -994,6 +998,7 @@ export default {
 
       if (pathname === '/api/parent/tasks/templates' && method === 'POST') {
         const body = (await request.json().catch(() => ({}))) as any;
+        const clientRequestId = typeof body.clientRequestId === 'string' ? body.clientRequestId.trim() : '';
         const title = body.title?.trim();
         const description = body.description?.trim() || null;
         const rewardMinutes = Math.max(1, Number(body.rewardMinutes) || 15);
@@ -1013,6 +1018,9 @@ export default {
         const validDays = [...new Set(rawDays.filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
 
         if (!title) return errorJson('כותרת משימה נדרשת', 400);
+        if (clientRequestId && !/^[A-Za-z0-9._:-]{8,160}$/.test(clientRequestId)) {
+          return errorJson('מזהה בקשה אינו תקין', 400);
+        }
         if (!['one_time','daily','weekly','custom','repeatable'].includes(scheduleType)) {
           return errorJson('תדירות משימה אינה תקינה', 400);
         }
@@ -1035,11 +1043,13 @@ export default {
             ? '[0,1,2,3,4,5,6]'
             : null;
 
-        const templateId = generateId();
+        const templateId = clientRequestId
+          ? `tplreq:${user.familyId}:${clientRequestId}`
+          : generateId();
         const now = new Date().toISOString();
 
         await env.DB.prepare(
-          `INSERT INTO task_templates (
+          `INSERT OR IGNORE INTO task_templates (
             id, family_id, title, description, reward_minutes, schedule_type, days_of_week,
             time_window_start, time_window_end, requires_photo, task_kind, one_time_date,
             verification_mode, verification_rules_json, allow_video_proof, auto_approve_enabled, max_daily_auto_awards,
@@ -1224,7 +1234,11 @@ export default {
           `SELECT ti.*, ts.status as submission_status, ts.note as submission_note, ts.photo_object_key
            FROM task_instances ti
            LEFT JOIN task_submissions ts ON ts.task_instance_id = ti.id AND ts.status = 'pending'
-           WHERE ti.child_id = ? AND (ti.due_date = ? OR ti.status = 'submitted')
+           WHERE ti.child_id = ? AND (
+             ti.due_date = ?
+             OR ti.status = 'submitted'
+             OR (tt.schedule_type = 'repeatable' AND ti.status IN ('open','rejected'))
+           )
            ORDER BY 
              CASE ti.status 
                WHEN 'submitted' THEN 1 
