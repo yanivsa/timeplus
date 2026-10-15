@@ -999,7 +999,6 @@ export default {
       if (pathname === '/api/parent/tasks/templates' && method === 'POST') {
         const body = (await request.json().catch(() => ({}))) as any;
         const clientRequestId = typeof body.clientRequestId === 'string' ? body.clientRequestId.trim() : '';
-        const clientRequestId = typeof body.clientRequestId === 'string' ? body.clientRequestId.trim() : '';
         const title = body.title?.trim();
         const description = body.description?.trim() || null;
         const rewardMinutes = Math.max(1, Number(body.rewardMinutes) || 15);
@@ -1019,9 +1018,6 @@ export default {
         const validDays = [...new Set(rawDays.filter((d: number) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
 
         if (!title) return errorJson('כותרת משימה נדרשת', 400);
-        if (clientRequestId && !/^[A-Za-z0-9._:-]{8,160}$/.test(clientRequestId)) {
-          return errorJson('מזהה בקשה אינו תקין', 400);
-        }
         if (clientRequestId && !/^[A-Za-z0-9._:-]{8,160}$/.test(clientRequestId)) {
           return errorJson('מזהה בקשה אינו תקין', 400);
         }

@@ -390,7 +390,6 @@ export const ParentDashboard: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           clientRequestId,
-          clientRequestId,
           title: templateTitle.trim(),
           description: templateDescription.trim() || null,
           rewardMinutes: templateReward,
