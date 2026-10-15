@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../services/api';
 import { audio } from '../services/audio';
@@ -107,6 +107,9 @@ export const ParentDashboard: React.FC = () => {
   const [customApprovalMinutes, setCustomApprovalMinutes] = useState<number>(15);
 
   const [newTemplateModal, setNewTemplateModal] = useState(false);
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const creatingTemplateRef = useRef(false);
+  const taskCreationRequestIdRef = useRef<string | null>(null);
   const [templateTitle, setTemplateTitle] = useState('');
   const [templateDescription, setTemplateDescription] = useState('');
   const [templateReward, setTemplateReward] = useState<number>(15);
@@ -371,12 +374,22 @@ export const ParentDashboard: React.FC = () => {
   // Create Template
   const handleCreateTemplate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (creatingTemplateRef.current) return;
+
+    creatingTemplateRef.current = true;
+    setCreatingTemplate(true);
+    const clientRequestId =
+      taskCreationRequestIdRef.current ||
+      globalThis.crypto?.randomUUID?.() ||
+      `task-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    taskCreationRequestIdRef.current = clientRequestId;
     audio.playTap();
 
     try {
       await apiRequest('/api/parent/tasks/templates', {
         method: 'POST',
         body: JSON.stringify({
+          clientRequestId,
           title: templateTitle.trim(),
           description: templateDescription.trim() || null,
           rewardMinutes: templateReward,
@@ -412,12 +425,16 @@ export const ParentDashboard: React.FC = () => {
       setTemplateTimeEnd('');
       setTemplateChildIds([]);
       setTemplateAiEnabled(false); setTemplateAllowVideo(false); setTemplateAutoApprove(false); setTemplateAiInstructions('');
+      taskCreationRequestIdRef.current = null;
       setStatusMessage({ text: 'תבנית המשימה נוצרה בהצלחה!', type: 'success' });
       await loadTemplates();
       await loadDashboard();
     } catch (err: any) {
       audio.playReject();
       setStatusMessage({ text: err.message || 'יצירת תבנית נכשלה', type: 'error' });
+    } finally {
+      creatingTemplateRef.current = false;
+      setCreatingTemplate(false);
     }
   };
 
@@ -1706,9 +1723,10 @@ export const ParentDashboard: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 text-sm shadow-md"
+                disabled={creatingTemplate}
+                className="w-full py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 text-sm shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                צור משימה
+                {creatingTemplate ? 'יוצר משימה...' : 'צור משימה'}
               </button>
             </form>
           </div>
