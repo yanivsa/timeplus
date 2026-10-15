@@ -10,6 +10,16 @@ function replaceOnce(source, before, after, label) {
   return source.replace(before, after);
 }
 
+function replaceExactCount(source, before, after, expectedCount, label) {
+  const count = source.split(before).length - 1;
+  if (count === 0) {
+    if (source.includes(after)) return source;
+    throw new Error(`Pattern not found for ${label}`);
+  }
+  if (count !== expectedCount) throw new Error(`Expected ${expectedCount} matches for ${label}, found ${count}`);
+  return source.split(before).join(after);
+}
+
 const parentPath = 'web/src/screens/ParentDashboard.tsx';
 let parent = readFileSync(parentPath, 'utf8');
 
@@ -67,10 +77,11 @@ writeFileSync(parentPath, parent);
 const workerPath = 'worker/src/index.ts';
 let worker = readFileSync(workerPath, 'utf8');
 
-worker = replaceOnce(
+worker = replaceExactCount(
   worker,
   "           WHERE ti.child_id = ? AND (ti.due_date = ? OR ti.status = 'submitted')",
   "           WHERE ti.child_id = ? AND (\n             ti.due_date = ?\n             OR ti.status = 'submitted'\n             OR (tt.schedule_type = 'repeatable' AND ti.status IN ('open','rejected'))\n           )",
+  2,
   'child repeatable task visibility'
 );
 
