@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [ main ]
 
-permissions:
-  contents: write
-
 jobs:
   web-and-worker:
     name: Build Web & Worker
@@ -16,9 +13,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -26,23 +20,6 @@ jobs:
           node-version: 22
           cache: 'npm'
           cache-dependency-path: package-lock.json
-
-      - name: Apply focused task regression source fix
-        if: github.event_name == 'pull_request' && github.head_ref == 'fix/task-duplication-hidden-repeatables'
-        run: node scripts/apply-task-regression-fix.mjs
-
-      - name: Persist focused task regression source fix
-        if: github.event_name == 'pull_request' && github.head_ref == 'fix/task-duplication-hidden-repeatables'
-        run: |
-          if git diff --quiet; then
-            echo "No source changes needed"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add web/src/screens/ParentDashboard.tsx worker/src/index.ts
-            git commit -m "fix: prevent duplicate tasks and show repeatable tasks [task-fix-applied]"
-            git push origin HEAD:${GITHUB_HEAD_REF}
-          fi
 
       - name: Install dependencies
         run: npm ci
@@ -98,7 +75,6 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
           cache: 'gradle'
 
       - name: Grant execute permission for gradlew
