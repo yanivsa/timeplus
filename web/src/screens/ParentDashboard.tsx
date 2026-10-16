@@ -40,6 +40,27 @@ import {
 } from 'lucide-react';
 import { NotificationBell } from '../components/NotificationBell';
 
+const getAiApprovalConfidence = (submission: any): number | null => {
+  const raw = submission?.latest_ai_result_json;
+  let parsed: any = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  }
+  const value = Number(parsed?.approvalConfidence ?? parsed?.confidence);
+  if (!Number.isFinite(value)) return null;
+  return Math.round(Math.max(0, Math.min(100, value)));
+};
+
+const getAiRecommendationText = (submission: any): string => {
+  if (submission?.verification_status === 'ai_unavailable') return 'AI לא הצליח לבדוק';
+  switch (submission?.ai_shadow_decision) {
+    case 'verified': return 'ממליץ לאשר';
+    case 'not_verified': return 'ממליץ לא לאשר';
+    case 'needs_review': return 'ממליץ לבדוק ידנית';
+    default: return submission?.verification_status === 'pending_ai' ? 'AI בודק…' : 'ממתין להערכת AI';
+  }
+};
+
 const formatPendingAge = (iso?: string | null): string => {
   if (!iso) return 'זמן לא ידוע';
   const timestamp = new Date(iso).getTime();
@@ -266,7 +287,16 @@ export const ParentDashboard: React.FC = () => {
 
       if (!asset) throw new Error('לא נמצא קובץ תיעוד זמין לצפייה');
       const mediaUrl = `/api/parent/evidence/${submission.id}/media/${asset.id}`;
-      setEvidenceViewer({ submission: detail.submission || submission, asset, mediaUrl });
+      const latestSuccessfulAttempt = (detail.verificationAttempts || []).find((attempt: any) => attempt?.status === 'success');
+      setEvidenceViewer({
+        submission: {
+          ...submission,
+          ...(detail.submission || {}),
+          latest_ai_result_json: latestSuccessfulAttempt?.result_json || submission.latest_ai_result_json || null,
+        },
+        asset,
+        mediaUrl,
+      });
     } catch (err: any) {
       setEvidenceViewerError(err?.message || 'לא ניתן לטעון את התיעוד');
     } finally {
@@ -1055,6 +1085,14 @@ export const ParentDashboard: React.FC = () => {
                               📎 תיעוד מצורף · לצפייה
                             </button>
                           )}
+                          {evidenceByTaskId[t.id] && evidenceByTaskId[t.id].review_mode !== 'automatic' && (
+                            <span className="inline-flex items-center rounded-lg border border-violet-500/30 bg-violet-950/40 px-2 py-0.5 font-semibold text-violet-200">
+                              🤖 {getAiApprovalConfidence(evidenceByTaskId[t.id]) !== null
+                                ? `ביטחון AI באישור: ${getAiApprovalConfidence(evidenceByTaskId[t.id])}%`
+                                : getAiRecommendationText(evidenceByTaskId[t.id])}
+                              <span className="mr-1 text-[10px] text-violet-400">· מצב Shadow</span>
+                            </span>
+                          )}
                         </div>
                         {t.submission_note && (
                           <p className="mt-2 text-xs text-amber-300 bg-amber-950/30 border border-amber-500/20 p-2 rounded-xl">
@@ -1493,21 +1531,41 @@ export const ParentDashboard: React.FC = () => {
                 </div>
               )}
               {!evidenceViewerLoading && !evidenceViewerError && evidenceViewer.asset && (
-                String(evidenceViewer.asset.mime_type || '').startsWith('video/') ? (
-                  <video
-                    src={evidenceViewer.mediaUrl}
-                    controls
-                    playsInline
-                    preload="metadata"
-                    className="max-h-[72vh] w-full rounded-2xl bg-black object-contain"
-                  />
-                ) : (
-                  <img
-                    src={evidenceViewer.mediaUrl}
-                    alt="תיעוד מצורף למשימה"
-                    className="max-h-[72vh] max-w-full rounded-2xl object-contain"
-                  />
-                )
+                <div className="w-full space-y-3">
+                  {String(evidenceViewer.asset.mime_type || '').startsWith('video/') ? (
+                    <video
+                      src={evidenceViewer.mediaUrl}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="max-h-[65vh] w-full rounded-2xl bg-black object-contain"
+                    />
+                  ) : (
+                    <img
+                      src={evidenceViewer.mediaUrl}
+                      alt="תיעוד מצורף למשימה"
+                      className="max-h-[65vh] mx-auto max-w-full rounded-2xl object-contain"
+                    />
+                  )}
+                  {evidenceViewer.submission?.review_mode !== 'automatic' && (
+                    <div className="rounded-2xl border border-violet-500/30 bg-violet-950/35 p-3 text-right">
+                      <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-violet-100">
+                        <span>
+                          {getAiApprovalConfidence(evidenceViewer.submission) !== null
+                            ? `ביטחון AI באישור: ${getAiApprovalConfidence(evidenceViewer.submission)}%`
+                            : getAiRecommendationText(evidenceViewer.submission)}
+                        </span>
+                        <span className="rounded-full border border-violet-500/30 px-2 py-0.5 text-[10px] text-violet-300">מצב Shadow · המלצה בלבד</span>
+                      </div>
+                      {evidenceViewer.submission?.ai_shadow_decision && (
+                        <div className="mt-1 text-xs text-violet-200">{getAiRecommendationText(evidenceViewer.submission)}</div>
+                      )}
+                      {evidenceViewer.submission?.verification_summary && (
+                        <div className="mt-2 text-xs leading-relaxed text-purple-200">{evidenceViewer.submission.verification_summary}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

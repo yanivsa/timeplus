@@ -466,6 +466,9 @@ async function listParentEvidence(env: Env, user: AuthUser, url: URL): Promise<R
                     ts.submitted_at, ts.reviewed_at, ts.verification_status, ts.verification_summary,
                     ts.review_mode, ts.media_kind, ts.media_source, ts.media_sha256,
                     ts.evidence_expires_at, ts.retention_hold, ts.verification_route, ts.verification_provider, ts.verification_model, ts.verification_checks_json, ts.verification_policy_version, ts.verification_prompt_version, ts.verification_risk_flags_json, ts.ai_shadow_decision, ts.auto_approval_eligible, ts.ai_verified_at,
+                    (SELECT ava.result_json FROM ai_verification_attempts ava
+                     WHERE ava.submission_id = ts.id AND ava.status = 'success'
+                     ORDER BY ava.created_at DESC LIMIT 1) AS latest_ai_result_json,
                     ti.title AS task_title, ti.reward_minutes, ti.task_kind, ti.status AS task_status,
                     c.name AS child_name, c.color AS child_color, c.avatar AS child_avatar,
                     (SELECT sea.id FROM submission_evidence_assets sea
