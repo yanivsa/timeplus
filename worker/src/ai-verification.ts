@@ -298,12 +298,8 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
      ORDER BY CASE kind WHEN 'normalized' THEN 1 WHEN 'contact_sheet' THEN 2 WHEN 'keyframe' THEN 3 ELSE 4 END, created_at ASC`
   ).bind(submissionId).all<any>();
   const duplicateDetected = (assets || []).some((a: any) => Boolean(a.duplicate_of_asset_id));
-  if (duplicateDetected) {
-    await updateManualFallback(env, submissionId, 'needs_parent_review', 'זוהתה ראיה זהה להגשה קודמת; נדרשת בדיקת הורה.', {
-      riskFlags: ['duplicate'], decision: 'needs_review',
-    });
-    return;
-  }
+  // Duplicate content remains a hard automatic-approval blocker, but Shadow AI
+  // still evaluates it so the parent gets a confidence recommendation.
 
   const visual = (assets || []).filter((a: any) =>
     String(a.mime_type || '').startsWith('image/') &&
@@ -380,14 +376,17 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
     }
   }
 
-  if ((!response || !response.ok) && directEnabled) {
+  const freeRouterModelHint = response?.headers.get('x-free-router-route-model')
+    || response?.headers.get('x-free-router-model') || '';
+  const freeRouterWrongModel = Boolean(response?.ok && /(?:content[-_ ]?safety|safety)/i.test(freeRouterModelHint));
+  if ((!response || !response.ok || freeRouterWrongModel) && directEnabled) {
     if (response) {
       const body = await response.clone().text().catch(() => '');
       await recordAttempt(env, submissionId, {
         route: 'free_router',
         provider: response.headers.get('x-free-router-provider'),
         model: response.headers.get('x-free-router-route-model'),
-        status: `http_${response.status}`,
+        status: freeRouterWrongModel ? 'invalid_model_for_vision' : `http_${response.status}`,
         latencyMs: Date.now() - startedAt,
         result: { status: response.status, body: body.slice(0, 1000) },
       });
@@ -419,10 +418,10 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
     return;
   }
 
-  const provider = route === 'openrouter_direct' ? 'openrouter' : response.headers.get('x-free-router-provider');
-  const routeModel = route === 'openrouter_direct' ? 'openrouter/free' : response.headers.get('x-free-router-route-model');
-  const canonical = route === 'openrouter_direct' ? 'openrouter/free' : response.headers.get('x-free-router-model');
-  const rawText = await response.text();
+  let provider = route === 'openrouter_direct' ? 'openrouter' : response.headers.get('x-free-router-provider');
+  let routeModel = route === 'openrouter_direct' ? 'openrouter/free' : response.headers.get('x-free-router-route-model');
+  let canonical = route === 'openrouter_direct' ? 'openrouter/free' : response.headers.get('x-free-router-model');
+  let rawText = await response.text();
   if (!response.ok) {
     await recordAttempt(env, submissionId, {
       route, provider, model: routeModel || canonical, status: `http_${response.status}`,
@@ -431,19 +430,26 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
     await updateManualFallback(env, submissionId, 'ai_unavailable', 'לא נמצא כרגע מודל Vision חינמי מתאים; התיעוד נשמר לבדיקה ידנית.');
     return;
   }
-
-  let parsed: any = null;
-  try { parsed = JSON.parse(rawText); } catch {}
-  const content = normalizedContent(parsed?.choices?.[0]?.message?.content);
-  let rr: any = null;
-  try { rr = JSON.parse(content); } catch {}
+  let parsed: any = null; try { parsed = JSON.parse(rawText); } catch {}
+  let content = normalizedContent(parsed?.choices?.[0]?.message?.content);
+  let rr: any = null; try { rr = JSON.parse(content); } catch {}
+  if ((!rr || typeof rr !== 'object') && route === 'free_router' && directEnabled) {
+    await recordAttempt(env, submissionId, { route, provider, model: routeModel || canonical, status: 'invalid_structured_output', latencyMs: Date.now() - startedAt, result: { content: content.slice(0, 1000) } });
+    route = 'openrouter_direct';
+    try {
+      response = await fetchAiWithTimeout((signal) => fetch('https://openrouter.ai/api/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://timeplus-app.pages.dev', 'X-Title': 'Time+ evidence verification' }, body: JSON.stringify({ ...payload, model: 'openrouter/free' }), signal }));
+    } catch (error) {
+      await recordAttempt(env, submissionId, { route, provider: 'openrouter', model: 'openrouter/free', status: 'network_error', latencyMs: Date.now() - startedAt, result: { error: String(error) } }); response = null;
+    }
+    if (!response) { await updateManualFallback(env, submissionId, 'ai_unavailable', 'שירות האימות לא היה זמין; התיעוד נשמר לבדיקה ידנית.'); return; }
+    provider = 'openrouter'; routeModel = 'openrouter/free'; canonical = 'openrouter/free'; rawText = await response.text();
+    if (!response.ok) { await recordAttempt(env, submissionId, { route, provider, model: routeModel, status: `http_${response.status}`, latencyMs: Date.now() - startedAt, result: { status: response.status, body: rawText.slice(0, 1000) } }); await updateManualFallback(env, submissionId, 'ai_unavailable', 'לא נמצא כרגע מודל Vision חינמי מתאים; התיעוד נשמר לבדיקה ידנית.'); return; }
+    parsed = null; try { parsed = JSON.parse(rawText); } catch {}
+    content = normalizedContent(parsed?.choices?.[0]?.message?.content); rr = null; try { rr = JSON.parse(content); } catch {}
+  }
   if (!rr || typeof rr !== 'object') {
-    await recordAttempt(env, submissionId, {
-      route, provider, model: routeModel || canonical, status: 'invalid_structured_output',
-      latencyMs: Date.now() - startedAt, result: { content: content.slice(0, 1000) },
-    });
-    await updateManualFallback(env, submissionId, 'ai_unavailable', 'תוצאת האימות האוטומטי לא הייתה תקינה; התיעוד נשמר לבדיקה ידנית.');
-    return;
+    await recordAttempt(env, submissionId, { route, provider, model: routeModel || canonical, status: 'invalid_structured_output', latencyMs: Date.now() - startedAt, result: { content: content.slice(0, 1000) } });
+    await updateManualFallback(env, submissionId, 'ai_unavailable', 'תוצאת האימות האוטומטי לא הייתה תקינה; התיעוד נשמר לבדיקה ידנית.'); return;
   }
 
   let haprofessorEvaluation: HaprofessorEvaluation | null = null;

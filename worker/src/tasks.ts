@@ -65,8 +65,9 @@ export async function ensureDailyTaskInstances(
             .prepare(
               `INSERT INTO task_instances (
                 id, family_id, template_id, child_id, title, description, 
-                reward_minutes, requires_photo, task_kind, status, due_date, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+                reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json,
+                allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
             )
             .bind(
               instanceId,
@@ -78,6 +79,11 @@ export async function ensureDailyTaskInstances(
               tpl.reward_minutes,
               tpl.requires_photo,
               tpl.task_kind || 'bonus',
+              tpl.verification_mode || 'manual',
+              tpl.verification_rules_json || null,
+              Number(tpl.allow_video_proof || 0),
+              Number(tpl.auto_approve_enabled || 0),
+              tpl.max_daily_auto_awards ?? null,
               targetDateStr
             )
             .run();
@@ -249,8 +255,9 @@ export async function submitTask(
         .prepare(
           `INSERT INTO task_instances (
             id, family_id, template_id, child_id, title, description, 
-            reward_minutes, requires_photo, task_kind, status, due_date, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
+            reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json,
+            allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
         )
         .bind(
           nextInstanceId,
@@ -262,6 +269,11 @@ export async function submitTask(
           tpl.reward_minutes,
           tpl.requires_photo,
           tpl.task_kind || 'bonus',
+          tpl.verification_mode || 'manual',
+          tpl.verification_rules_json || null,
+          Number(tpl.allow_video_proof || 0),
+          Number(tpl.auto_approve_enabled || 0),
+          tpl.max_daily_auto_awards ?? null,
           getIsraelDateString(),
           now,
           now
