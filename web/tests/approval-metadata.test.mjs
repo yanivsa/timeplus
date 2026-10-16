@@ -15,3 +15,12 @@ test('task approval cards visibly mark attached evidence', () => {
   assert.match(source, /תיעוד מצורף/, 'missing visible evidence badge');
   assert.match(source, /evidenceTaskIds\.has\(t\.id\)/, 'evidence badge must be tied to the task being reviewed');
 });
+
+test('attached evidence badge opens an image/video evidence viewer', () => {
+  assert.match(source, /openEvidenceForTask\s*=\s*async/, 'missing action that opens attached evidence');
+  assert.match(source, /onClick=\{\(\) => openEvidenceForTask\(t\.id\)\}/, 'attached evidence badge must be clickable');
+  assert.ok(source.includes('const detail = await apiRequest(`/api/parent/evidence/${submission.id}`);'), 'viewer must load the selected evidence submission');
+  assert.ok(source.includes('const mediaUrl = `/api/parent/evidence/${submission.id}/media/${asset.id}`;'), 'viewer must use the protected evidence media endpoint');
+  assert.match(source, /<video[\s\S]{0,500}controls/, 'video evidence must be playable in the parent viewer');
+  assert.match(source, /<img[\s\S]{0,500}alt="תיעוד מצורף למשימה"/, 'image evidence must be visible in the parent viewer');
+});
