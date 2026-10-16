@@ -358,13 +358,15 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
 
   let response: Response | null = null;
   let route = 'free_router';
-  if (env.FREE_ROUTER && env.TIMEPLUS_ROUTER_TOKEN) {
+  const freeRouter = env.FREE_ROUTER;
+  const timeplusRouterToken = env.TIMEPLUS_ROUTER_TOKEN;
+  if (freeRouter && timeplusRouterToken) {
     try {
-      response = await fetchAiWithTimeout((signal) => env.FREE_ROUTER.fetch('https://free-router.internal/v1/chat/completions', {
+      response = await fetchAiWithTimeout((signal) => freeRouter.fetch('https://free-router.internal/v1/chat/completions', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-timeplus-service-token': env.TIMEPLUS_ROUTER_TOKEN,
+          'x-timeplus-service-token': timeplusRouterToken,
           'x-free-router-session': `timeplus-proof-${submissionId}`,
         },
         body: JSON.stringify(payload),
