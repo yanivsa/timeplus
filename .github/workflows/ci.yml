@@ -25,7 +25,7 @@ jobs:
         run: npm ci
 
       - name: Test Haprofessor verification contracts
-        run: node --test worker/tests/haprofessor-verifier.test.mjs worker/tests/haprofessor-integration.test.mjs worker/tests/ai-shadow-confidence.test.mjs
+        run: node --test worker/tests/haprofessor-verifier.test.mjs worker/tests/haprofessor-integration.test.mjs worker/tests/ai-shadow-confidence.test.mjs worker/tests/ai-stale-recovery.test.mjs
 
       - name: Test approval metadata UI contract
         run: node --test web/tests/approval-metadata.test.mjs
