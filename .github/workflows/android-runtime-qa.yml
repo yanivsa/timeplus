@@ -3,6 +3,7 @@ name: Android Runtime QA
 on:
   push:
     branches:
+      - main
       - migration/pages-origin-v1.0.4
   pull_request:
     branches:
