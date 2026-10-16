@@ -41,3 +41,5 @@ test('invalid structured output from the free router falls back to the direct pr
     'a successful-but-invalid free-router response must get a second provider attempt before manual fallback'
   );
 });
+
+// CI trigger after the auto-patch commit; intentionally no behavior change.
