@@ -29,3 +29,5 @@ test('shadow mode is advisory only, including Haprofessor submissions', () => {
     'Haprofessor must not bypass global shadow mode'
   );
 });
+
+// CI trigger after source patch; no behavior change.
