@@ -24,6 +24,9 @@ test('task approval commits financial, XP, celebration, notification and audit e
     assert.match(staged, new RegExp(required), `${required} must be staged before the approval batch commits`);
   }
 
+  assert.match(staged, /xp\s*=\s*xp\s*\+\s*\?/,
+    'XP must use an arithmetic increment inside D1 so concurrent task approvals cannot overwrite each other');
+
   const afterBatch = block.slice(block.indexOf('const approvalResults = await db.batch(approvalStatements);'));
   assert.doesNotMatch(afterBatch, /UPDATE child_progress|INSERT INTO reward_events|INSERT INTO notifications|INSERT INTO audit_log/,
     'approval side effects must not be written after the guarded batch has already committed');
