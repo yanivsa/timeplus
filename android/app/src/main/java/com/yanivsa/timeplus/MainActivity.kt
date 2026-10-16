@@ -52,6 +52,8 @@ class MainActivity : AppCompatActivity() {
         )
         private const val EXACT_ALARM_PROMPT_PREFS = "timeplus_exact_alarm_prompt"
         private const val KEY_LAST_EXACT_ALARM_PROMPT = "last_prompt_at"
+        private const val AUTH_PREFS_NAME = "timeplus_auth"
+        private const val KEY_AUTH_TOKEN = "bearer_token"
         private const val EXACT_ALARM_PROMPT_COOLDOWN_MS = 24 * 60 * 60 * 1000L
     }
 
@@ -522,6 +524,29 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface
         fun getDeviceName(): String {
             return "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+        }
+
+        @JavascriptInterface
+        fun getAuthToken(): String {
+            return activity.getSharedPreferences(AUTH_PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_AUTH_TOKEN, "")
+                .orEmpty()
+        }
+
+        @JavascriptInterface
+        fun setAuthToken(token: String) {
+            activity.getSharedPreferences(AUTH_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_AUTH_TOKEN, token.trim())
+                .apply()
+        }
+
+        @JavascriptInterface
+        fun clearAuthToken() {
+            activity.getSharedPreferences(AUTH_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .remove(KEY_AUTH_TOKEN)
+                .apply()
         }
 
         @JavascriptInterface

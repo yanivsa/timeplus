@@ -22,6 +22,11 @@ type SessionRow = {
 
 const SELF_REVIEW_MARKER = 'child_self';
 
+function isActiveSessionConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return /UNIQUE constraint failed: screen_sessions\.child_id|idx_one_active_screen_session_per_child/i.test(message);
+}
+
 const ALLOWED_SELF_SOURCES = new Set([
   'playstation',
   'vr',
@@ -363,11 +368,16 @@ export async function startScreenSession(
   const seconds = request.approved_minutes * 60;
   const id = generateId();
 
-  await db.prepare(
-    `INSERT INTO screen_sessions
-      (id,family_id,child_id,screen_time_request_id,source,allocated_seconds,remaining_seconds,status,started_at,last_resumed_at,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,'running',?,?,?,?)`
-  ).bind(id, familyId, childId, requestId, request.source, seconds, seconds, now, now, now, now).run();
+  try {
+    await db.prepare(
+      `INSERT INTO screen_sessions
+        (id,family_id,child_id,screen_time_request_id,source,allocated_seconds,remaining_seconds,status,started_at,last_resumed_at,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,'running',?,?,?,?)`
+    ).bind(id, familyId, childId, requestId, request.source, seconds, seconds, now, now, now, now).run();
+  } catch (error) {
+    if (isActiveSessionConflict(error)) return { success: false, error: 'כבר קיים טיימר פעיל' };
+    throw error;
+  }
 
   return { success: true, id };
 }
@@ -404,30 +414,35 @@ export async function startSelfScreenSession(
 
   // screen_sessions currently requires a request id. This hidden cancelled request
   // is only a technical anchor and is excluded from normal approval flows.
-  await db.batch([
-    db.prepare(
-      `INSERT INTO screen_time_requests
-        (id,family_id,child_id,requested_minutes,approved_minutes,source,status,requested_at,reviewed_at,reviewed_by)
-       VALUES (?,?,?,0,NULL,?,'cancelled',?,?,?)`
-    ).bind(requestId, familyId, childId, source, now, now, SELF_REVIEW_MARKER),
-    db.prepare(
-      `INSERT INTO screen_sessions
-        (id,family_id,child_id,screen_time_request_id,source,allocated_seconds,remaining_seconds,status,started_at,last_resumed_at,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,'running',?,?,?,?)`
-    ).bind(sessionId, familyId, childId, requestId, source, seconds, seconds, now, now, now, now),
-    db.prepare(
-      `INSERT INTO audit_log
-        (id,family_id,actor_type,actor_id,action,entity_type,entity_id,metadata_json,created_at)
-       VALUES (?,?,'child',?,'self_screen_usage_started','screen_session',?,?,?)`
-    ).bind(
-      generateId(),
-      familyId,
-      childId,
-      sessionId,
-      JSON.stringify({ source, maxMinutes: availableMinutes }),
-      now
-    ),
-  ]);
+  try {
+    await db.batch([
+      db.prepare(
+        `INSERT INTO screen_time_requests
+          (id,family_id,child_id,requested_minutes,approved_minutes,source,status,requested_at,reviewed_at,reviewed_by)
+         VALUES (?,?,?,0,NULL,?,'cancelled',?,?,?)`
+      ).bind(requestId, familyId, childId, source, now, now, SELF_REVIEW_MARKER),
+      db.prepare(
+        `INSERT INTO screen_sessions
+          (id,family_id,child_id,screen_time_request_id,source,allocated_seconds,remaining_seconds,status,started_at,last_resumed_at,created_at,updated_at)
+         VALUES (?,?,?,?,?,?,?,'running',?,?,?,?)`
+      ).bind(sessionId, familyId, childId, requestId, source, seconds, seconds, now, now, now, now),
+      db.prepare(
+        `INSERT INTO audit_log
+          (id,family_id,actor_type,actor_id,action,entity_type,entity_id,metadata_json,created_at)
+         VALUES (?,?,'child',?,'self_screen_usage_started','screen_session',?,?,?)`
+      ).bind(
+        generateId(),
+        familyId,
+        childId,
+        sessionId,
+        JSON.stringify({ source, maxMinutes: availableMinutes }),
+        now
+      ),
+    ]);
+  } catch (error) {
+    if (isActiveSessionConflict(error)) return { success: false, error: 'כבר קיים טיימר פעיל' };
+    throw error;
+  }
 
   return { success: true, id: sessionId, maxMinutes: availableMinutes };
 }

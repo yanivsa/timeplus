@@ -1,5 +1,6 @@
 import { generateId } from './crypto';
 import { resolveEvidenceRetention } from './evidence-retention';
+import { sendNotification } from './notifications';
 import {
   evaluateHaprofessorExtraction,
   HaprofessorEvaluation,
@@ -591,6 +592,17 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
     }),
     now
   ).run();
+  await sendNotification(env.DB, env, {
+    familyId: sub.family_id,
+    recipientRole: 'child',
+    recipientChildId: sub.child_id,
+    type: 'task_approved',
+    title: (approved.minutesAwarded || 0) > 0 ? `המשימה אושרה! +${approved.minutesAwarded} דק'` : 'משימת חובה אושרה! ⭐',
+    message: `המשימה "${sub.task_title}" אושרה אוטומטית לאחר אימות התיעוד.`,
+    entityType: 'task_instance',
+    entityId: sub.task_instance_id,
+    skipDbInsert: true,
+  });
 }
 
 export async function recoverStalePendingAiEvidence(env: Env): Promise<{

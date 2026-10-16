@@ -1,6 +1,6 @@
 import { MinuteTransaction, ScreenTimeRequest, ScreenUsageLog, ScreenTimeSource } from './types';
 import { generateId } from './crypto';
-import { getIsraelDateString, getIsraelStartOfWeek, getIsraelStartOfMonth } from './timezone';
+import { getIsraelDateString, getIsraelDateOffset, getIsraelStartOfWeek, getIsraelStartOfMonth, getIsraelUtcRange } from './timezone';
 
 export async function requestScreenTime(
   db: D1Database,
@@ -90,148 +90,116 @@ export async function reviewScreenTimeRequest(
     .bind(requestId, parentFamilyId)
     .first<ScreenTimeRequest>();
 
-  if (!req) {
-    return { success: false, error: 'הבקשה לא נמצאה' };
-  }
-
-  if (req.status !== 'pending') {
-    return { success: false, error: 'הבקשה כבר טופלה בעבר' };
-  }
+  if (!req) return { success: false, error: 'הבקשה לא נמצאה' };
+  if (req.status !== 'pending') return { success: false, error: 'הבקשה כבר טופלה בעבר' };
 
   const now = new Date().toISOString();
 
   if (!approved) {
-    // Rejection
     const updateRes = await db
       .prepare(
-        `UPDATE screen_time_requests 
-         SET status = 'rejected', reviewed_at = ?, reviewed_by = 'parent' 
-         WHERE id = ? AND status = 'pending'`
+        `UPDATE screen_time_requests
+         SET status = 'rejected', reviewed_at = ?, reviewed_by = 'parent'
+         WHERE id = ? AND family_id = ? AND status = 'pending'`
       )
-      .bind(now, requestId)
+      .bind(now, requestId, parentFamilyId)
       .run();
 
-    if (updateRes.meta.changes === 0) {
-      return { success: false, error: 'הבקשה כבר טופלה' };
-    }
+    if (updateRes.meta.changes === 0) return { success: false, error: 'הבקשה כבר טופלה' };
 
-    await db
-      .prepare(
+    await db.batch([
+      db.prepare(
         `INSERT INTO notifications (
           id, family_id, recipient_role, recipient_child_id, type, title, message, entity_type, entity_id, created_at
         ) VALUES (?, ?, 'child', ?, 'screen_rejected', 'בקשת זמן מסך לא אושרה', 'ההורים לא אישרו את בקשת זמן המסך כעת.', 'screen_request', ?, ?)`
-      )
-      .bind(generateId(), parentFamilyId, req.child_id, requestId, now)
-      .run();
-
-    await db
-      .prepare(
+      ).bind(generateId(), parentFamilyId, req.child_id, requestId, now),
+      db.prepare(
         `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
          VALUES (?, ?, 'parent', 'parent', 'screen_time_rejected', 'screen_time_request', ?, '{}', ?)`
-      )
-      .bind(generateId(), parentFamilyId, requestId, now)
-      .run();
+      ).bind(generateId(), parentFamilyId, requestId, now),
+    ]);
 
     return { success: true, deductedMinutes: 0 };
   }
 
-  // Approval
   const finalMinutes =
-    typeof customMinutes === 'number' && !isNaN(customMinutes) && customMinutes > 0
+    typeof customMinutes === 'number' && Number.isFinite(customMinutes) && customMinutes > 0
       ? customMinutes
       : req.requested_minutes;
-
-  // Guarded update: ONLY update if still 'pending'
-  const updateRes = await db
-    .prepare(
-      `UPDATE screen_time_requests 
-       SET status = 'approved', approved_minutes = ?, reviewed_at = ?, reviewed_by = 'parent' 
-       WHERE id = ? AND status = 'pending'`
-    )
-    .bind(finalMinutes, now, requestId)
-    .run();
-
-  if (updateRes.meta.changes === 0) {
-    return { success: false, error: 'הבקשה כבר טופלה' };
-  }
-
-  // Update child balance
-  const child = await db
-    .prepare(`SELECT available_minutes FROM children WHERE id = ?`)
-    .bind(req.child_id)
-    .first<{ available_minutes: number }>();
-
-  const prevBalance = child?.available_minutes || 0;
-  const newBalance = prevBalance - finalMinutes;
-
-  await db
-    .prepare(`UPDATE children SET available_minutes = ?, updated_at = ? WHERE id = ?`)
-    .bind(newBalance, now, req.child_id)
-    .run();
-
-  // Create usage log
+  const reviewOperationId = generateId();
   const usageLogId = generateId();
-  await db
-    .prepare(
+  const txId = generateId();
+  const spendReason = `זמן מסך: ${req.source} (${finalMinutes} דק')`;
+
+  const results = await db.batch([
+    db.prepare(
+      `UPDATE screen_time_requests
+       SET status = 'approved', approved_minutes = ?, reviewed_at = ?, reviewed_by = 'parent', review_operation_id = ?
+       WHERE id = ? AND family_id = ? AND status = 'pending'`
+    ).bind(finalMinutes, now, reviewOperationId, requestId, parentFamilyId),
+    db.prepare(
+      `UPDATE children
+       SET available_minutes = available_minutes - ?, updated_at = ?
+       WHERE id = ? AND family_id = ?
+         AND EXISTS (
+           SELECT 1 FROM screen_time_requests r
+           WHERE r.id = ? AND r.family_id = ? AND r.status = 'approved' AND r.review_operation_id = ?
+         )`
+    ).bind(finalMinutes, now, req.child_id, parentFamilyId, requestId, parentFamilyId, reviewOperationId),
+    db.prepare(
       `INSERT INTO screen_usage_logs (
         id, family_id, child_id, screen_time_request_id, source, minutes, reason, created_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 'אישור בקשת מסך', 'parent', ?)`
-    )
-    .bind(usageLogId, parentFamilyId, req.child_id, requestId, req.source, finalMinutes, now)
-    .run();
-
-  // Create spend transaction
-  await db
-    .prepare(
+      )
+      SELECT ?, ?, ?, ?, ?, ?, 'אישור בקשת מסך', 'parent', ?
+      WHERE EXISTS (
+        SELECT 1 FROM screen_time_requests r
+        WHERE r.id = ? AND r.family_id = ? AND r.status = 'approved' AND r.review_operation_id = ?
+      )`
+    ).bind(usageLogId, parentFamilyId, req.child_id, requestId, req.source, finalMinutes, now, requestId, parentFamilyId, reviewOperationId),
+    db.prepare(
       `INSERT INTO minute_transactions (
         id, family_id, child_id, type, amount, balance_after, reason, screen_usage_log_id, screen_time_request_id, created_by, created_at
-      ) VALUES (?, ?, ?, 'spend', ?, ?, ?, ?, ?, 'parent', ?)`
-    )
-    .bind(
-      generateId(),
-      parentFamilyId,
-      req.child_id,
-      -finalMinutes,
-      newBalance,
-      `זמן מסך: ${req.source} (${finalMinutes} דק')`,
-      usageLogId,
-      requestId,
-      now
-    )
-    .run();
-
-  // Notification for child
-  await db
-    .prepare(
+      )
+      SELECT ?, ?, c.id, 'spend', ?, c.available_minutes, ?, ?, ?, 'parent', ?
+      FROM children c
+      WHERE c.id = ? AND c.family_id = ?
+        AND EXISTS (
+          SELECT 1 FROM screen_time_requests r
+          WHERE r.id = ? AND r.family_id = ? AND r.status = 'approved' AND r.review_operation_id = ?
+        )`
+    ).bind(txId, parentFamilyId, -finalMinutes, spendReason, usageLogId, requestId, now, req.child_id, parentFamilyId, requestId, parentFamilyId, reviewOperationId),
+    db.prepare(
       `INSERT INTO notifications (
         id, family_id, recipient_role, recipient_child_id, type, title, message, entity_type, entity_id, created_at
-      ) VALUES (?, ?, 'child', ?, 'screen_approved', ?, ?, 'screen_request', ?, ?)`
-    )
-    .bind(
-      generateId(),
-      parentFamilyId,
-      req.child_id,
+      )
+      SELECT ?, ?, 'child', ?, 'screen_approved', ?, ?, 'screen_request', ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM screen_time_requests r
+        WHERE r.id = ? AND r.review_operation_id = ?
+      )`
+    ).bind(
+      generateId(), parentFamilyId, req.child_id,
       `זמן מסך אושר! (${finalMinutes} דקות)`,
       `תהנה! נוכו ${finalMinutes} דקות עבור ${req.source}.`,
-      requestId,
-      now
-    )
-    .run();
-
-  // Audit log
-  await db
-    .prepare(
+      requestId, now, requestId, reviewOperationId
+    ),
+    db.prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
-       VALUES (?, ?, 'parent', 'parent', 'screen_time_approved', 'screen_time_request', ?, ?, ?)`
-    )
-    .bind(
-      generateId(),
-      parentFamilyId,
-      requestId,
-      JSON.stringify({ finalMinutes, source: req.source, newBalance }),
-      now
-    )
-    .run();
+       SELECT ?, ?, 'parent', 'parent', 'screen_time_approved', 'screen_time_request', ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM screen_time_requests r
+         WHERE r.id = ? AND r.review_operation_id = ?
+       )`
+    ).bind(
+      generateId(), parentFamilyId, requestId,
+      JSON.stringify({ finalMinutes, source: req.source, reviewOperationId }),
+      now, requestId, reviewOperationId
+    ),
+  ]);
+
+  if (Number((results[0] as any)?.meta?.changes || 0) === 0) {
+    return { success: false, error: 'הבקשה כבר טופלה' };
+  }
 
   return { success: true, deductedMinutes: finalMinutes };
 }
@@ -244,82 +212,54 @@ export async function logManualScreenUsage(
   source: ScreenTimeSource,
   reason: string | null = null
 ): Promise<{ success: boolean; error?: string; warning?: string; newBalance?: number }> {
-  if (minutes <= 0) {
+  if (!Number.isFinite(minutes) || minutes <= 0) {
     return { success: false, error: 'הדקות לניצול חייבות להיות מספר חיובי' };
   }
 
   const child = await db
-    .prepare(`SELECT available_minutes, name FROM children WHERE id = ? AND family_id = ?`)
+    .prepare(`SELECT id FROM children WHERE id = ? AND family_id = ?`)
     .bind(childId, familyId)
-    .first<{ available_minutes: number; name: string }>();
+    .first<{ id: string }>();
+  if (!child) return { success: false, error: 'הילד לא נמצא' };
 
-  if (!child) {
-    return { success: false, error: 'הילד לא נמצא' };
-  }
-
-  // Load family settings for debt warning threshold
   const settings = await db
     .prepare(`SELECT warning_debt_threshold FROM family_settings WHERE family_id = ?`)
     .bind(familyId)
     .first<{ warning_debt_threshold: number }>();
-
   const threshold = settings?.warning_debt_threshold ?? -60;
   const now = new Date().toISOString();
-  const prevBalance = child.available_minutes;
-  const newBalance = prevBalance - minutes;
-
-  let warning: string | undefined;
-  if (newBalance < threshold) {
-    warning = `שים לב: היתרה החדשה (${newBalance} דקות) חורגת מסף האזהרה המשפחתי (${threshold} דקות)`;
-  }
-
-  await db
-    .prepare(`UPDATE children SET available_minutes = ?, updated_at = ? WHERE id = ?`)
-    .bind(newBalance, now, childId)
-    .run();
-
   const usageLogId = generateId();
-  await db
-    .prepare(
+  const txId = generateId();
+  const ledgerReason = reason ? `ניצול מסך ידני: ${source} - ${reason}` : `ניצול מסך ידני: ${source}`;
+
+  await db.batch([
+    db.prepare(
+      `UPDATE children SET available_minutes = available_minutes - ?, updated_at = ? WHERE id = ? AND family_id = ?`
+    ).bind(minutes, now, childId, familyId),
+    db.prepare(
       `INSERT INTO screen_usage_logs (
         id, family_id, child_id, screen_time_request_id, source, minutes, reason, created_by, created_at
       ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'parent', ?)`
-    )
-    .bind(usageLogId, familyId, childId, source, minutes, reason, now)
-    .run();
-
-  await db
-    .prepare(
+    ).bind(usageLogId, familyId, childId, source, minutes, reason, now),
+    db.prepare(
       `INSERT INTO minute_transactions (
         id, family_id, child_id, type, amount, balance_after, reason, screen_usage_log_id, created_by, created_at
-      ) VALUES (?, ?, ?, 'spend', ?, ?, ?, ?, 'parent', ?)`
-    )
-    .bind(
-      generateId(),
-      familyId,
-      childId,
-      -minutes,
-      newBalance,
-      reason ? `ניצול מסך ידני: ${source} - ${reason}` : `ניצול מסך ידני: ${source}`,
-      usageLogId,
-      now
-    )
-    .run();
-
-  // Audit log
-  await db
-    .prepare(
+      )
+      SELECT ?, ?, c.id, 'spend', ?, c.available_minutes, ?, ?, 'parent', ?
+      FROM children c WHERE c.id = ? AND c.family_id = ?`
+    ).bind(txId, familyId, -minutes, ledgerReason, usageLogId, now, childId, familyId),
+    db.prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
        VALUES (?, ?, 'parent', 'parent', 'manual_screen_usage_logged', 'screen_usage_log', ?, ?, ?)`
-    )
-    .bind(
-      generateId(),
-      familyId,
-      usageLogId,
-      JSON.stringify({ minutes, source, reason, newBalance }),
-      now
-    )
-    .run();
+    ).bind(generateId(), familyId, usageLogId, JSON.stringify({ minutes, source, reason }), now),
+  ]);
+
+  const updated = await db.prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
+    .bind(childId, familyId).first<{ available_minutes: number }>();
+  const newBalance = Number(updated?.available_minutes || 0);
+  const warning = newBalance < threshold
+    ? `שים לב: היתרה החדשה (${newBalance} דקות) חורגת מסף האזהרה המשפחתי (${threshold} דקות)`
+    : undefined;
 
   return { success: true, warning, newBalance };
 }
@@ -331,95 +271,64 @@ export async function adjustMinutes(
   minutesDelta: number,
   reason: string
 ): Promise<{ success: boolean; error?: string; warning?: string; newBalance?: number }> {
-  if (minutesDelta === 0) {
+  if (!Number.isFinite(minutesDelta) || minutesDelta === 0) {
     return { success: false, error: 'שינוי הדקות לא יכול להיות אפס' };
   }
-
   if (minutesDelta < 0 && (!reason || reason.trim() === '')) {
     return { success: false, error: 'הפחתת דקות דורשת ציון סיבה' };
   }
 
   const child = await db
-    .prepare(`SELECT available_minutes, name FROM children WHERE id = ? AND family_id = ?`)
+    .prepare(`SELECT id FROM children WHERE id = ? AND family_id = ?`)
     .bind(childId, familyId)
-    .first<{ available_minutes: number; name: string }>();
-
-  if (!child) {
-    return { success: false, error: 'הילד לא נמצא' };
-  }
+    .first<{ id: string }>();
+  if (!child) return { success: false, error: 'הילד לא נמצא' };
 
   const settings = await db
     .prepare(`SELECT warning_debt_threshold FROM family_settings WHERE family_id = ?`)
     .bind(familyId)
     .first<{ warning_debt_threshold: number }>();
-
   const threshold = settings?.warning_debt_threshold ?? -60;
   const now = new Date().toISOString();
-  const prevBalance = child.available_minutes;
-  const newBalance = prevBalance + minutesDelta;
-
-  let warning: string | undefined;
-  if (newBalance < threshold) {
-    warning = `שים לב: היתרה החדשה (${newBalance} דקות) נמוכה מסף האזהרה (${threshold} דקות)`;
-  }
-
-  await db
-    .prepare(`UPDATE children SET available_minutes = ?, updated_at = ? WHERE id = ?`)
-    .bind(newBalance, now, childId)
-    .run();
-
   const txId = generateId();
-  await db
-    .prepare(
+  const ledgerReason = reason || (minutesDelta > 0 ? 'תוספת דקות ידנית' : 'הפחתת דקות ידנית');
+  const statements = [
+    db.prepare(`UPDATE children SET available_minutes = available_minutes + ?, updated_at = ? WHERE id = ? AND family_id = ?`)
+      .bind(minutesDelta, now, childId, familyId),
+    db.prepare(
       `INSERT INTO minute_transactions (
         id, family_id, child_id, type, amount, balance_after, reason, created_by, created_at
-      ) VALUES (?, ?, ?, 'adjustment', ?, ?, ?, 'parent', ?)`
-    )
-    .bind(
-      txId,
-      familyId,
-      childId,
-      minutesDelta,
-      newBalance,
-      reason || (minutesDelta > 0 ? 'תוספת דקות ידנית' : 'הפחתת דקות ידנית'),
-      now
-    )
-    .run();
+      )
+      SELECT ?, ?, c.id, 'adjustment', ?, c.available_minutes, ?, 'parent', ?
+      FROM children c WHERE c.id = ? AND c.family_id = ?`
+    ).bind(txId, familyId, minutesDelta, ledgerReason, now, childId, familyId),
+  ];
 
   if (minutesDelta > 0) {
-    // Reward event if bonus
-    await db
-      .prepare(
+    statements.push(
+      db.prepare(
         `INSERT INTO reward_events (
           id, family_id, child_id, type, title, body, minutes_delta, xp_delta, seen_at, created_at
         ) VALUES (?, ?, ?, 'manual_bonus', ?, ?, ?, 0, NULL, ?)`
-      )
-      .bind(
-        generateId(),
-        familyId,
-        childId,
-        'קיבלת בונוס דקות!',
-        `נוספו ${minutesDelta} דקות: ${reason}`,
-        minutesDelta,
-        now
-      )
-      .run();
+      ).bind(generateId(), familyId, childId, 'קיבלת בונוס דקות!', `נוספו ${minutesDelta} דקות: ${reason}`, minutesDelta, now)
+    );
   }
 
-  // Audit log
-  await db
-    .prepare(
+  statements.push(
+    db.prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
        VALUES (?, ?, 'parent', 'parent', 'manual_minute_adjustment', 'minute_transaction', ?, ?, ?)`
-    )
-    .bind(
-      generateId(),
-      familyId,
-      txId,
-      JSON.stringify({ minutesDelta, reason, newBalance }),
-      now
-    )
-    .run();
+    ).bind(generateId(), familyId, txId, JSON.stringify({ minutesDelta, reason }), now)
+  );
+
+  await db.batch(statements);
+
+  const updated = await db.prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
+    .bind(childId, familyId).first<{ available_minutes: number }>();
+  const newBalance = Number(updated?.available_minutes || 0);
+  const warning = newBalance < threshold
+    ? `שים לב: היתרה החדשה (${newBalance} דקות) נמוכה מסף האזהרה (${threshold} דקות)`
+    : undefined;
 
   return { success: true, warning, newBalance };
 }
@@ -434,62 +343,61 @@ export async function correctUsage(
     .prepare(`SELECT * FROM screen_usage_logs WHERE id = ? AND family_id = ?`)
     .bind(usageLogId, familyId)
     .first<ScreenUsageLog>();
+  if (!usage) return { success: false, error: 'רשומת הניצול לא נמצאה' };
 
-  if (!usage) {
-    return { success: false, error: 'רשומת הניצול לא נמצאה' };
-  }
-
-  const child = await db
-    .prepare(`SELECT available_minutes FROM children WHERE id = ?`)
-    .bind(usage.child_id)
-    .first<{ available_minutes: number }>();
-
-  const prevBalance = child?.available_minutes || 0;
-  const refundedMinutes = usage.minutes;
-  const newBalance = prevBalance + refundedMinutes;
   const now = new Date().toISOString();
-
-  // Update balance
-  await db
-    .prepare(`UPDATE children SET available_minutes = ?, updated_at = ? WHERE id = ?`)
-    .bind(newBalance, now, usage.child_id)
-    .run();
-
-  // Create refund transaction (immutable ledger principle)
+  const correctionId = generateId();
   const txId = generateId();
-  await db
-    .prepare(
+  const refundedMinutes = Number(usage.minutes || 0);
+  const refundReason = `זיכוי / תיקון רישום שגוי: ${correctionReason || 'תיקון ניצול מסך'}`;
+
+  const results = await db.batch([
+    db.prepare(
+      `INSERT OR IGNORE INTO screen_usage_corrections (
+        id, usage_log_id, family_id, child_id, transaction_id, correction_reason, corrected_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(correctionId, usageLogId, familyId, usage.child_id, txId, correctionReason || null, now),
+    db.prepare(
+      `UPDATE children
+       SET available_minutes = available_minutes + ?, updated_at = ?
+       WHERE id = ? AND family_id = ?
+         AND EXISTS (
+           SELECT 1 FROM screen_usage_corrections c
+           WHERE c.id = ? AND c.usage_log_id = ?
+         )`
+    ).bind(refundedMinutes, now, usage.child_id, familyId, correctionId, usageLogId),
+    db.prepare(
       `INSERT INTO minute_transactions (
         id, family_id, child_id, type, amount, balance_after, reason, screen_usage_log_id, created_by, created_at
-      ) VALUES (?, ?, ?, 'refund', ?, ?, ?, ?, 'parent', ?)`
-    )
-    .bind(
-      txId,
-      familyId,
-      usage.child_id,
-      refundedMinutes,
-      newBalance,
-      `זיכוי / תיקון רישום שגוי: ${correctionReason || 'תיקון ניצול מסך'}`,
-      usageLogId,
-      now
-    )
-    .run();
-
-  // Audit log
-  await db
-    .prepare(
+      )
+      SELECT ?, ?, c.id, 'refund', ?, c.available_minutes, ?, ?, 'parent', ?
+      FROM children c
+      WHERE c.id = ? AND c.family_id = ?
+        AND EXISTS (
+          SELECT 1 FROM screen_usage_corrections correction
+          WHERE correction.id = ? AND correction.usage_log_id = ?
+        )`
+    ).bind(txId, familyId, refundedMinutes, refundReason, usageLogId, now, usage.child_id, familyId, correctionId, usageLogId),
+    db.prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
-       VALUES (?, ?, 'parent', 'parent', 'usage_corrected_refunded', 'screen_usage_log', ?, ?, ?)`
-    )
-    .bind(
-      generateId(),
-      familyId,
-      usageLogId,
-      JSON.stringify({ refundedMinutes, correctionReason, newBalance }),
-      now
-    )
-    .run();
+       SELECT ?, ?, 'parent', 'parent', 'usage_corrected_refunded', 'screen_usage_log', ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM screen_usage_corrections c WHERE c.id = ? AND c.usage_log_id = ?
+       )`
+    ).bind(
+      generateId(), familyId, usageLogId,
+      JSON.stringify({ refundedMinutes, correctionReason, correctionId }), now,
+      correctionId, usageLogId
+    ),
+  ]);
 
+  if (Number((results[0] as any)?.meta?.changes || 0) === 0) {
+    return { success: false, error: 'רשומת הניצול כבר תוקנה בעבר' };
+  }
+
+  const child = await db.prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
+    .bind(usage.child_id, familyId).first<{ available_minutes: number }>();
+  const newBalance = Number(child?.available_minutes || 0);
   return { success: true, refundedMinutes, newBalance };
 }
 
@@ -511,46 +419,30 @@ export async function getChildWalletSummary(
     .first<{ available_minutes: number }>();
 
   const availableMinutes = child?.available_minutes || 0;
-
   const todayIsrael = getIsraelDateString();
+  const tomorrowIsrael = getIsraelDateOffset(1);
   const startOfWeek = getIsraelStartOfWeek();
   const startOfMonth = getIsraelStartOfMonth();
+  const todayRange = getIsraelUtcRange(todayIsrael, tomorrowIsrael);
+  const weekRange = getIsraelUtcRange(startOfWeek, tomorrowIsrael);
+  const monthRange = getIsraelUtcRange(startOfMonth, tomorrowIsrael);
 
-  // Today stats
-  const todayRow = await db
+  const summarize = async (startUtc: string, endUtc: string) => db
     .prepare(
-      `SELECT 
+      `SELECT
         COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
         COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as spent
-       FROM minute_transactions 
-       WHERE child_id = ? AND date(created_at, '+3 hours') = ?`
+       FROM minute_transactions
+       WHERE child_id = ? AND created_at >= ? AND created_at < ?`
     )
-    .bind(childId, todayIsrael)
+    .bind(childId, startUtc, endUtc)
     .first<{ earned: number; spent: number }>();
 
-  // Week stats
-  const weekRow = await db
-    .prepare(
-      `SELECT 
-        COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
-        COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as spent
-       FROM minute_transactions 
-       WHERE child_id = ? AND date(created_at, '+3 hours') >= ?`
-    )
-    .bind(childId, startOfWeek)
-    .first<{ earned: number; spent: number }>();
-
-  // Month stats
-  const monthRow = await db
-    .prepare(
-      `SELECT 
-        COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
-        COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as spent
-       FROM minute_transactions 
-       WHERE child_id = ? AND date(created_at, '+3 hours') >= ?`
-    )
-    .bind(childId, startOfMonth)
-    .first<{ earned: number; spent: number }>();
+  const [todayRow, weekRow, monthRow] = await Promise.all([
+    summarize(todayRange.startUtc, todayRange.endUtc),
+    summarize(weekRange.startUtc, weekRange.endUtc),
+    summarize(monthRange.startUtc, monthRange.endUtc),
+  ]);
 
   return {
     availableMinutes,
