@@ -509,7 +509,7 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
   const autoEligible = eligibility.eligible && capAllowed;
   const mode = String(env.AI_EVIDENCE_MODE || 'shadow').toLowerCase();
   const professorAutoEnabled = haprofessorMode && String((env as any).HAPROFESSOR_AUTO_APPROVE_ENABLED || 'false') === 'true';
-  const automaticMode = mode === 'auto' || professorAutoEnabled;
+  const automaticMode = mode === 'auto' && (!haprofessorMode || professorAutoEnabled);
   await recordAttempt(env, submissionId, {
     route, provider, model: routeModel || canonical, status: 'success', latencyMs: Date.now() - startedAt,
     result: { ...result, requiredChecks: required, autoEligible, blockers: eligibility.blockers, canonical },
