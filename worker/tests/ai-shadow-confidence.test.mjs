@@ -16,7 +16,16 @@ test('parent evidence list exposes latest AI result for shadow recommendation re
   assert.match(evidence, /result_json\s+FROM\s+ai_verification_attempts[\s\S]{0,400}latest_ai_result_json/, 'parent evidence list must expose the latest AI result JSON');
 });
 
-test('confidence remains advisory while global evidence mode is shadow', () => {
+test('shadow mode is advisory only, including Haprofessor submissions', () => {
   assert.match(ai, /AI_EVIDENCE_MODE \|\| 'shadow'/, 'shadow must remain the default global mode');
-  assert.match(ai, /const automaticMode = mode === 'auto' \|\| professorAutoEnabled/, 'generic shadow confidence must not enable automatic approval');
+  assert.match(
+    ai,
+    /const automaticMode = mode === 'auto' && \(!haprofessorMode \|\| professorAutoEnabled\)/,
+    'automatic approval must require global auto mode; Haprofessor flag may only gate auto mode, never override shadow'
+  );
+  assert.doesNotMatch(
+    ai,
+    /const automaticMode = mode === 'auto' \|\| professorAutoEnabled/,
+    'Haprofessor must not bypass global shadow mode'
+  );
 });
