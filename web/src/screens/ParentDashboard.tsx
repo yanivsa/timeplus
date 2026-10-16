@@ -53,11 +53,13 @@ const getAiApprovalConfidence = (submission: any): number | null => {
 
 const getAiRecommendationText = (submission: any): string => {
   if (submission?.verification_status === 'ai_unavailable') return 'AI לא הצליח לבדוק';
+  if (submission?.verification_status === 'needs_parent_review') return 'נדרשת בדיקת הורה';
+  if (submission?.verification_status === 'rejected_by_ai' && !submission?.ai_shadow_decision) return 'ממליץ לא לאשר';
   switch (submission?.ai_shadow_decision) {
     case 'verified': return 'ממליץ לאשר';
     case 'not_verified': return 'ממליץ לא לאשר';
     case 'needs_review': return 'ממליץ לבדוק ידנית';
-    default: return submission?.verification_status === 'pending_ai' ? 'AI בודק…' : 'ממתין להערכת AI';
+    default: return submission?.verification_status === 'pending_ai' ? 'AI בודק…' : 'ללא הערכת AI';
   }
 };
 
@@ -621,6 +623,11 @@ export const ParentDashboard: React.FC = () => {
           timeWindowStart: tpl.time_window_start || null,
           timeWindowEnd: tpl.time_window_end || null,
           assignedChildIds: tpl.assigned_child_ids || [],
+          verificationMode: tpl.verification_mode || 'manual',
+          verificationRules: tpl.verification_rules_json ? JSON.parse(tpl.verification_rules_json) : null,
+          allowVideoProof: Number(tpl.allow_video_proof || 0) === 1,
+          autoApproveEnabled: Number(tpl.auto_approve_enabled || 0) === 1,
+          maxDailyAutoAwards: tpl.max_daily_auto_awards ?? null,
         }),
       });
       audio.playApproval();

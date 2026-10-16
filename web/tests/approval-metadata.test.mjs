@@ -31,3 +31,11 @@ test('shadow AI recommendation shows a numeric confidence without auto-approving
   assert.match(source, /getAiApprovalConfidence\s*=|aiApprovalConfidence/, 'parent UI must derive a numeric confidence from evidence metadata');
   assert.match(source, /verification_summary/, 'parent evidence viewer must show the AI explanation');
 });
+
+test('needs_parent_review is never mislabeled as waiting for AI', () => {
+  assert.match(
+    source,
+    /verification_status\s*===\s*['"]needs_parent_review['"][\s\S]{0,220}(?:בדיקת הורה|נדרשת בדיקת הורה|ממתין לבדיקת הורה)/,
+    'manual-review evidence must be labeled as parent review, not pending AI'
+  );
+});
