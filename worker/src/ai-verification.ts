@@ -16,7 +16,7 @@ export const AI_POLICY_VERSION = 'proof-policy-v2-haprofessor';
 type CheckResult = 'pass' | 'fail' | 'unknown';
 type AiDecision = 'verified' | 'needs_review' | 'not_verified';
 interface VerificationCheck { id: string; result: CheckResult; reason: string; }
-interface VerificationResult { decision: AiDecision; checks: VerificationCheck[]; observed: string; suspicious: boolean; riskFlags: string[]; reason: string; }
+interface VerificationResult { decision: AiDecision; checks: VerificationCheck[]; observed: string; suspicious: boolean; riskFlags: string[]; reason: string; approvalConfidence: number; }
 interface SubmissionRow {
   id: string; task_instance_id: string; child_id: string; family_id: string; template_id: string | null;
   task_title: string; task_description: string | null; task_status: string; reward_minutes: number; task_kind: string;
@@ -99,8 +99,9 @@ const GENERIC_SCHEMA = {
       suspicious: { type: 'boolean' },
       riskFlags: { type: 'array', items: { type: 'string' }, maxItems: 12 },
       reason: { type: 'string' },
+      approvalConfidence: { type: 'number', minimum: 0, maximum: 100 },
     },
-    required: ['decision', 'checks', 'observed', 'suspicious', 'riskFlags', 'reason'],
+    required: ['decision', 'checks', 'observed', 'suspicious', 'riskFlags', 'reason', 'approvalConfidence'],
   },
 };
 
@@ -135,6 +136,9 @@ function normalizedContent(content: unknown): string {
 
 function validateResult(v: any): VerificationResult | null {
   if (!v || !['verified', 'needs_review', 'not_verified'].includes(v.decision) || !Array.isArray(v.checks) || !v.checks.length) return null;
+  const rawApprovalConfidence = Number(v.approvalConfidence);
+  if (!Number.isFinite(rawApprovalConfidence)) return null;
+  const approvalConfidence = Math.round(Math.max(0, Math.min(100, rawApprovalConfidence)));
   const checks: VerificationCheck[] = [];
   for (const c of v.checks) {
     if (!c || typeof c.id !== 'string' || !['pass', 'fail', 'unknown'].includes(c.result)) return null;
@@ -147,6 +151,7 @@ function validateResult(v: any): VerificationResult | null {
     suspicious: v.suspicious === true,
     riskFlags: Array.isArray(v.riskFlags) ? v.riskFlags.map((x: any) => String(x).slice(0, 120)).slice(0, 12) : [],
     reason: String(v.reason || '').slice(0, 700),
+    approvalConfidence,
   };
 }
 
@@ -322,6 +327,7 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
         `Verification rules: ${JSON.stringify(rules)}`,
         `Required checks: ${required.join(', ')}`,
         'Be conservative. If the requested activity is unclear, completion is not visible, text is unreadable, the image is partial/manipulated, or evidence is ambiguous, use needs_review/not_verified and unknown/fail checks.',
+        'approvalConfidence is a 0-100 confidence that the evidence satisfies all required checks and would merit parent approval. This is advisory only in Shadow mode; lower it for ambiguity, unreadable details, conflicting evidence, or risk flags.',
         rules?.requireScreenUi === true ? 'For screen_ui_visible, pass only when the evidence clearly shows a software/app result screen or interface, not merely a camera photo of the physical world.' : '',
         'Return only the requested structured object. Do not decide reward minutes.',
       ].filter(Boolean).join('\n');
@@ -424,7 +430,7 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
   let result: VerificationResult | null = null;
   if (haprofessorMode) {
     haprofessorEvaluation = evaluateHaprofessorExtraction(rr as HaprofessorModelExtraction);
-    result = haprofessorEvaluation;
+    result = { ...haprofessorEvaluation, approvalConfidence: haprofessorEvaluation.confidence };
     await env.DB.prepare(
       `UPDATE task_submissions
        SET evidence_provider='haprofessor', external_reference_id=?, detected_course_id=?,

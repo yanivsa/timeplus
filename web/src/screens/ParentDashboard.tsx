@@ -40,6 +40,27 @@ import {
 } from 'lucide-react';
 import { NotificationBell } from '../components/NotificationBell';
 
+const getAiApprovalConfidence = (submission: any): number | null => {
+  const raw = submission?.latest_ai_result_json;
+  let parsed: any = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); } catch { parsed = null; }
+  }
+  const value = Number(parsed?.approvalConfidence ?? parsed?.confidence);
+  if (!Number.isFinite(value)) return null;
+  return Math.round(Math.max(0, Math.min(100, value)));
+};
+
+const getAiRecommendationText = (submission: any): string => {
+  if (submission?.verification_status === 'ai_unavailable') return 'AI לא הצליח לבדוק';
+  switch (submission?.ai_shadow_decision) {
+    case 'verified': return 'ממליץ לאשר';
+    case 'not_verified': return 'ממליץ לא לאשר';
+    case 'needs_review': return 'ממליץ לבדוק ידנית';
+    default: return submission?.verification_status === 'pending_ai' ? 'AI בודק…' : 'ממתין להערכת AI';
+  }
+};
+
 const formatPendingAge = (iso?: string | null): string => {
   if (!iso) return 'זמן לא ידוע';
   const timestamp = new Date(iso).getTime();
@@ -85,6 +106,10 @@ export const ParentDashboard: React.FC = () => {
   const [pendingTasks, setPendingTasks] = useState<PendingApprovalItem[]>([]);
   const [pendingRequests, setPendingRequests] = useState<ScreenTimeRequestItem[]>([]);
   const [evidenceTaskIds, setEvidenceTaskIds] = useState<Set<string>>(new Set());
+  const [evidenceByTaskId, setEvidenceByTaskId] = useState<Record<string, any>>({});
+  const [evidenceViewer, setEvidenceViewer] = useState<{ submission: any; asset: any | null; mediaUrl: string } | null>(null);
+  const [evidenceViewerLoading, setEvidenceViewerLoading] = useState(false);
+  const [evidenceViewerError, setEvidenceViewerError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<TaskTemplateItem[]>([]);
   const [history, setHistory] = useState<TransactionItem[]>([]);
   const [stats, setStats] = useState<any[]>([]);
@@ -165,12 +190,18 @@ export const ParentDashboard: React.FC = () => {
 
       try {
         const evidenceRes = await apiRequest('/api/parent/evidence?limit=100');
-        const pendingEvidenceTaskIds = (evidenceRes.submissions || [])
-          .filter((submission: any) => submission?.status === 'pending' && submission?.task_instance_id)
-          .map((submission: any) => String(submission.task_instance_id));
-        setEvidenceTaskIds(new Set(pendingEvidenceTaskIds));
+        const pendingEvidence = (evidenceRes.submissions || [])
+          .filter((submission: any) => submission?.status === 'pending' && submission?.task_instance_id);
+        const byTask: Record<string, any> = {};
+        for (const submission of pendingEvidence) {
+          const taskId = String(submission.task_instance_id);
+          if (!byTask[taskId]) byTask[taskId] = submission;
+        }
+        setEvidenceTaskIds(new Set(Object.keys(byTask)));
+        setEvidenceByTaskId(byTask);
       } catch {
         setEvidenceTaskIds(new Set());
+        setEvidenceByTaskId({});
       }
     } catch (e) {
       console.error('Failed to load parent dashboard', e);
@@ -227,6 +258,51 @@ export const ParentDashboard: React.FC = () => {
     if (activeTab === 'stats') loadStats();
     if (activeTab === 'settings') loadSettings();
   }, [activeTab]);
+
+  // Open attached evidence from the protected parent evidence API.
+  const openEvidenceForTask = async (taskInstanceId: string) => {
+    audio.playTap();
+    const submission = evidenceByTaskId[taskInstanceId];
+    if (!submission?.id) {
+      setStatusMessage({ text: 'לא נמצא קובץ תיעוד זמין לצפייה', type: 'error' });
+      return;
+    }
+
+    setEvidenceViewer({ submission, asset: null, mediaUrl: '' });
+    setEvidenceViewerLoading(true);
+    setEvidenceViewerError(null);
+
+    try {
+      const detail = await apiRequest(`/api/parent/evidence/${submission.id}`);
+      const activeAssets = (detail.assets || []).filter((asset: any) => !asset.deleted_at);
+      const mediaKind = detail.submission?.media_kind || submission.media_kind;
+      const asset = mediaKind === 'video'
+        ? activeAssets.find((item: any) => item.kind === 'original' && String(item.mime_type || '').startsWith('video/'))
+          || activeAssets.find((item: any) => String(item.mime_type || '').startsWith('video/'))
+          || activeAssets.find((item: any) => ['contact_sheet', 'keyframe'].includes(item.kind))
+        : activeAssets.find((item: any) => item.kind === 'normalized' && String(item.mime_type || '').startsWith('image/'))
+          || activeAssets.find((item: any) => item.kind === 'original' && String(item.mime_type || '').startsWith('image/'))
+          || activeAssets.find((item: any) => String(item.mime_type || '').startsWith('image/'))
+          || activeAssets[0];
+
+      if (!asset) throw new Error('לא נמצא קובץ תיעוד זמין לצפייה');
+      const mediaUrl = `/api/parent/evidence/${submission.id}/media/${asset.id}`;
+      const latestSuccessfulAttempt = (detail.verificationAttempts || []).find((attempt: any) => attempt?.status === 'success');
+      setEvidenceViewer({
+        submission: {
+          ...submission,
+          ...(detail.submission || {}),
+          latest_ai_result_json: latestSuccessfulAttempt?.result_json || submission.latest_ai_result_json || null,
+        },
+        asset,
+        mediaUrl,
+      });
+    } catch (err: any) {
+      setEvidenceViewerError(err?.message || 'לא ניתן לטעון את התיעוד');
+    } finally {
+      setEvidenceViewerLoading(false);
+    }
+  };
 
   // Approvals actions
   const handleApproveTask = async (instanceId: string, customReward?: number) => {
@@ -1000,8 +1076,21 @@ export const ParentDashboard: React.FC = () => {
                             נשלח {formatPendingAge(t.submission_time)} · {t.task_kind === 'mandatory' ? 'משימת חובה · XP' : `${t.reward_minutes} דקות`}
                           </span>
                           {(Boolean(t.photo_object_key) || evidenceTaskIds.has(t.id)) && (
-                            <span className="inline-flex items-center rounded-lg border border-cyan-500/30 bg-cyan-950/40 px-2 py-0.5 font-semibold text-cyan-300">
-                              📎 תיעוד מצורף
+                            <button
+                              type="button"
+                              onClick={() => openEvidenceForTask(t.id)}
+                              className="inline-flex items-center rounded-lg border border-cyan-500/30 bg-cyan-950/40 px-2 py-0.5 font-semibold text-cyan-300 hover:bg-cyan-900/50 hover:text-cyan-100 transition"
+                              title="צפייה בתיעוד המצורף"
+                            >
+                              📎 תיעוד מצורף · לצפייה
+                            </button>
+                          )}
+                          {evidenceByTaskId[t.id] && evidenceByTaskId[t.id].review_mode !== 'automatic' && (
+                            <span className="inline-flex items-center rounded-lg border border-violet-500/30 bg-violet-950/40 px-2 py-0.5 font-semibold text-violet-200">
+                              🤖 {getAiApprovalConfidence(evidenceByTaskId[t.id]) !== null
+                                ? `ביטחון AI באישור: ${getAiApprovalConfidence(evidenceByTaskId[t.id])}%`
+                                : getAiRecommendationText(evidenceByTaskId[t.id])}
+                              <span className="mr-1 text-[10px] text-violet-400">· מצב Shadow</span>
                             </span>
                           )}
                         </div>
@@ -1405,6 +1494,79 @@ export const ParentDashboard: React.FC = () => {
                   </div>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL: ATTACHED EVIDENCE VIEWER --- */}
+      {evidenceViewer && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-night-950/90 backdrop-blur-md animate-fade-in">
+          <div className="w-full max-w-3xl max-h-[92vh] flex flex-col rounded-3xl bg-night-900 border border-cyan-500/40 shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-cyan-500/20 bg-night-950/70 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="font-bold text-base text-cyan-200">תיעוד מצורף</h3>
+                <p className="text-xs text-purple-300 mt-0.5 truncate">
+                  {evidenceViewer.submission?.child_name ? `${evidenceViewer.submission.child_name} · ` : ''}
+                  {evidenceViewer.submission?.task_title || 'משימה'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setEvidenceViewer(null); setEvidenceViewerError(null); }}
+                className="p-2 rounded-xl text-purple-300 hover:text-white hover:bg-purple-950/60 transition shrink-0"
+                aria-label="סגור תיעוד"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto p-3 sm:p-5 bg-black/20 flex items-center justify-center min-h-[220px]">
+              {evidenceViewerLoading && (
+                <div className="text-sm text-purple-200">טוען את התיעוד...</div>
+              )}
+              {!evidenceViewerLoading && evidenceViewerError && (
+                <div className="max-w-md text-center rounded-2xl border border-red-500/30 bg-red-950/40 p-4 text-sm text-red-200">
+                  {evidenceViewerError}
+                </div>
+              )}
+              {!evidenceViewerLoading && !evidenceViewerError && evidenceViewer.asset && (
+                <div className="w-full space-y-3">
+                  {String(evidenceViewer.asset.mime_type || '').startsWith('video/') ? (
+                    <video
+                      src={evidenceViewer.mediaUrl}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="max-h-[65vh] w-full rounded-2xl bg-black object-contain"
+                    />
+                  ) : (
+                    <img
+                      src={evidenceViewer.mediaUrl}
+                      alt="תיעוד מצורף למשימה"
+                      className="max-h-[65vh] mx-auto max-w-full rounded-2xl object-contain"
+                    />
+                  )}
+                  {evidenceViewer.submission?.review_mode !== 'automatic' && (
+                    <div className="rounded-2xl border border-violet-500/30 bg-violet-950/35 p-3 text-right">
+                      <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-violet-100">
+                        <span>
+                          {getAiApprovalConfidence(evidenceViewer.submission) !== null
+                            ? `ביטחון AI באישור: ${getAiApprovalConfidence(evidenceViewer.submission)}%`
+                            : getAiRecommendationText(evidenceViewer.submission)}
+                        </span>
+                        <span className="rounded-full border border-violet-500/30 px-2 py-0.5 text-[10px] text-violet-300">מצב Shadow · המלצה בלבד</span>
+                      </div>
+                      {evidenceViewer.submission?.ai_shadow_decision && (
+                        <div className="mt-1 text-xs text-violet-200">{getAiRecommendationText(evidenceViewer.submission)}</div>
+                      )}
+                      {evidenceViewer.submission?.verification_summary && (
+                        <div className="mt-2 text-xs leading-relaxed text-purple-200">{evidenceViewer.submission.verification_summary}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
