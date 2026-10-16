@@ -58,6 +58,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add worker/src worker/migrations web/src/context android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt .github/workflows/android-runtime-qa.yml
+          git add worker/src worker/migrations web/src/context android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           git commit -m "fix: harden production state transitions and auth"
           git push origin HEAD:fix/production-hardening-2026-10-16
