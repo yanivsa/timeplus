@@ -313,6 +313,46 @@ export async function approveTask(
   const todayIsrael = getIsraelDateString();
   const approvalOperationId = generateId();
   const txId = rewardMinutes > 0 ? generateId() : null;
+  const xpAwarded = calculateTaskXp(instance.reward_minutes, instance.requires_photo === 1);
+
+  const existingProgress = await db
+    .prepare(`SELECT level, xp, current_streak_days, best_streak_days, last_active_date FROM child_progress WHERE child_id = ?`)
+    .bind(instance.child_id)
+    .first<{
+      level: number;
+      xp: number;
+      current_streak_days: number;
+      best_streak_days: number;
+      last_active_date: string | null;
+    }>();
+
+  const progress = existingProgress || {
+    level: 1,
+    xp: 0,
+    current_streak_days: 0,
+    best_streak_days: 0,
+    last_active_date: null,
+  };
+  const oldXp = Number(progress.xp || 0);
+  const newXp = oldXp + xpAwarded;
+  const oldRank = getRankDetails(oldXp);
+  const newRank = getRankDetails(newXp);
+  const isLevelUp = newRank.level > oldRank.level;
+
+  let newStreak = Number(progress.current_streak_days || 0);
+  if (!progress.last_active_date) {
+    newStreak = 1;
+  } else {
+    const diff = getIsraelDayDiff(progress.last_active_date, todayIsrael);
+    if (diff === 1) newStreak += 1;
+    else if (diff !== 0) newStreak = 1;
+  }
+  const bestStreak = Math.max(Number(progress.best_streak_days || 0), newStreak);
+  const operationGuard = `EXISTS (
+    SELECT 1 FROM task_instances ti
+    WHERE ti.id = ? AND ti.family_id = ? AND ti.status = 'approved'
+      AND ti.approval_operation_id = ?
+  )`;
 
   const approvalStatements = [
     db.prepare(
@@ -324,12 +364,7 @@ export async function approveTask(
     db.prepare(
       `UPDATE task_submissions
        SET status = 'approved', reviewed_at = ?
-       WHERE task_instance_id = ? AND status = 'pending'
-         AND EXISTS (
-           SELECT 1 FROM task_instances ti
-           WHERE ti.id = ? AND ti.family_id = ? AND ti.status = 'approved'
-             AND ti.approval_operation_id = ?
-         )`
+       WHERE task_instance_id = ? AND status = 'pending' AND ${operationGuard}`
     ).bind(now, instanceId, instanceId, parentFamilyId, approvalOperationId),
   ];
 
@@ -338,23 +373,15 @@ export async function approveTask(
       db.prepare(
         `UPDATE children
          SET available_minutes = available_minutes + ?, updated_at = ?
-         WHERE id = ? AND family_id = ?
-           AND EXISTS (
-             SELECT 1 FROM task_instances ti
-             WHERE ti.id = ? AND ti.status = 'approved' AND ti.approval_operation_id = ?
-           )`
-      ).bind(rewardMinutes, now, instance.child_id, parentFamilyId, instanceId, approvalOperationId),
+         WHERE id = ? AND family_id = ? AND ${operationGuard}`
+      ).bind(rewardMinutes, now, instance.child_id, parentFamilyId, instanceId, parentFamilyId, approvalOperationId),
       db.prepare(
         `INSERT INTO minute_transactions (
           id, family_id, child_id, type, amount, balance_after, reason, task_instance_id, created_by, created_at
         )
         SELECT ?, ?, c.id, 'earn', ?, c.available_minutes, ?, ?, ?, ?
         FROM children c
-        WHERE c.id = ? AND c.family_id = ?
-          AND EXISTS (
-            SELECT 1 FROM task_instances ti
-            WHERE ti.id = ? AND ti.status = 'approved' AND ti.approval_operation_id = ?
-          )`
+        WHERE c.id = ? AND c.family_id = ? AND ${operationGuard}`
       ).bind(
         txId,
         parentFamilyId,
@@ -366,86 +393,50 @@ export async function approveTask(
         instance.child_id,
         parentFamilyId,
         instanceId,
+        parentFamilyId,
         approvalOperationId
       )
     );
   }
 
-  const approvalResults = await db.batch(approvalStatements);
-  if (Number((approvalResults[0] as any)?.meta?.changes || 0) === 0) {
-    return { success: false, error: 'המשימה אינה ממתינה לאישור או שכבר אושרה' };
-  }
-
-  const child = await db
-    .prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
-    .bind(instance.child_id, parentFamilyId)
-    .first<{ available_minutes: number }>();
-  const newBalance = Number(child?.available_minutes || 0);
-
-  const xpAwarded = calculateTaskXp(instance.reward_minutes, instance.requires_photo === 1);
-
-  let progress = await db
-    .prepare(`SELECT * FROM child_progress WHERE child_id = ?`)
-    .bind(instance.child_id)
-    .first<{
-      level: number;
-      xp: number;
-      current_streak_days: number;
-      best_streak_days: number;
-      last_active_date: string | null;
-    }>();
-
-  if (!progress) {
-    progress = {
-      level: 1,
-      xp: 0,
-      current_streak_days: 0,
-      best_streak_days: 0,
-      last_active_date: null,
-    };
-    await db
-      .prepare(
-        `INSERT INTO child_progress (child_id, family_id, level, xp, current_streak_days, best_streak_days, last_active_date, updated_at)
-         VALUES (?, ?, 1, 0, 0, 0, NULL, ?)`
+  approvalStatements.push(
+    db.prepare(
+      `INSERT OR IGNORE INTO child_progress (
+        child_id, family_id, level, xp, current_streak_days, best_streak_days, last_active_date, updated_at
       )
-      .bind(instance.child_id, parentFamilyId, now)
-      .run();
-  }
-
-  const oldXp = progress.xp;
-  const newXp = oldXp + xpAwarded;
-  const oldRank = getRankDetails(oldXp);
-  const newRank = getRankDetails(newXp);
-  const isLevelUp = newRank.level > oldRank.level;
-
-  let newStreak = progress.current_streak_days;
-  if (!progress.last_active_date) {
-    newStreak = 1;
-  } else {
-    const diff = getIsraelDayDiff(progress.last_active_date, todayIsrael);
-    if (diff === 1) newStreak += 1;
-    else if (diff !== 0) newStreak = 1;
-  }
-
-  const bestStreak = Math.max(progress.best_streak_days, newStreak);
-
-  await db
-    .prepare(
+      SELECT ?, ?, 1, 0, 0, 0, NULL, ? WHERE ${operationGuard}`
+    ).bind(
+      instance.child_id,
+      parentFamilyId,
+      now,
+      instanceId,
+      parentFamilyId,
+      approvalOperationId
+    ),
+    db.prepare(
       `UPDATE child_progress
        SET level = ?, xp = ?, current_streak_days = ?, best_streak_days = ?, last_active_date = ?, updated_at = ?
-       WHERE child_id = ?`
-    )
-    .bind(newRank.level, newXp, newStreak, bestStreak, todayIsrael, now, instance.child_id)
-    .run();
-
-  await db
-    .prepare(
+       WHERE child_id = ? AND family_id = ? AND ${operationGuard}`
+    ).bind(
+      newRank.level,
+      newXp,
+      newStreak,
+      bestStreak,
+      todayIsrael,
+      now,
+      instance.child_id,
+      parentFamilyId,
+      instanceId,
+      parentFamilyId,
+      approvalOperationId
+    ),
+    db.prepare(
       `INSERT INTO reward_events (
         id, family_id, child_id, type, title, body, minutes_delta, xp_delta,
         level_before, level_after, streak_days, task_instance_id, seen_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`
-    )
-    .bind(
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ? WHERE ${operationGuard}`
+    ).bind(
       generateId(),
       parentFamilyId,
       instance.child_id,
@@ -460,17 +451,17 @@ export async function approveTask(
       newRank.level,
       newStreak,
       instanceId,
-      now
-    )
-    .run();
-
-  await db
-    .prepare(
+      now,
+      instanceId,
+      parentFamilyId,
+      approvalOperationId
+    ),
+    db.prepare(
       `INSERT INTO notifications (
         id, family_id, recipient_role, recipient_child_id, type, title, message, entity_type, entity_id, created_at
-      ) VALUES (?, ?, 'child', ?, 'task_approved', ?, ?, 'task_instance', ?, ?)`
-    )
-    .bind(
+      )
+      SELECT ?, ?, 'child', ?, 'task_approved', ?, ?, 'task_instance', ?, ? WHERE ${operationGuard}`
+    ).bind(
       generateId(),
       parentFamilyId,
       instance.child_id,
@@ -479,25 +470,34 @@ export async function approveTask(
         ? `המשימה "${instance.title}" אושרה! נוספו ${rewardMinutes} דקות לחשבונך.`
         : `המשימה "${instance.title}" אושרה! קיבלת ${xpAwarded} XP.`,
       instanceId,
-      now
-    )
-    .run();
-
-  await db
-    .prepare(
-      `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, 'task_approved', 'task_instance', ?, ?, ?)`
-    )
-    .bind(
+      now,
+      instanceId,
+      parentFamilyId,
+      approvalOperationId
+    ),
+    db.prepare(
+      `INSERT INTO audit_log (
+        id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at
+      )
+      SELECT ?, ?, ?, ?, 'task_approved', 'task_instance', ?, ?, ? WHERE ${operationGuard}`
+    ).bind(
       generateId(),
       parentFamilyId,
       actor === 'system' ? 'system' : 'parent',
       actor === 'system' ? 'ai_verifier' : 'parent',
       instanceId,
-      JSON.stringify({ rewardMinutes, xpAwarded, newBalance, levelUp: isLevelUp, approvalOperationId }),
-      now
+      JSON.stringify({ rewardMinutes, xpAwarded, levelUp: isLevelUp, approvalOperationId }),
+      now,
+      instanceId,
+      parentFamilyId,
+      approvalOperationId
     )
-    .run();
+  );
+
+  const approvalResults = await db.batch(approvalStatements);
+  if (Number((approvalResults[0] as any)?.meta?.changes || 0) === 0) {
+    return { success: false, error: 'המשימה אינה ממתינה לאישור או שכבר אושרה' };
+  }
 
   return { success: true, minutesAwarded: rewardMinutes, xpAwarded };
 }
