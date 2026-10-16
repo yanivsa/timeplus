@@ -1,6 +1,7 @@
 import baseWorker from './index';
 import { getSessionUser } from './auth';
 import { cleanupExpiredEvidence, handleEvidenceRequest } from './evidence';
+import { recoverStalePendingAiEvidence } from './ai-verification';
 import { handleEvidenceReviewRequest } from './evidence-review';
 import { ensureDailyTaskInstances } from './tasks';
 import { Env } from './types';
@@ -51,6 +52,14 @@ export default {
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     await (baseWorker.scheduled as any)(event, env, ctx);
+
+    // Recover AI verifications that outlived the HTTP waitUntil budget.
+    // Cron invocations can run much longer, so stale pending submissions get a
+    // bounded retry instead of remaining in pending_ai indefinitely.
+    const recovery = await recoverStalePendingAiEvidence(env);
+    if (recovery.retried || recovery.exhausted || recovery.failed) {
+      console.log(`Evidence AI recovery: ${JSON.stringify(recovery)}`);
+    }
 
     // The worker currently runs every minute. Evidence cleanup is intentionally
     // gated to one daily slot so R2/D1 maintenance does not run every minute.

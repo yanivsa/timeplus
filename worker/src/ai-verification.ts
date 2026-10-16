@@ -13,6 +13,12 @@ import { Env } from './types';
 export const AI_PROMPT_VERSION = 'proof-v2-haprofessor';
 export const AI_POLICY_VERSION = 'proof-policy-v2-haprofessor';
 
+const AI_FETCH_TIMEOUT_MS = 12_000;
+const STALE_PENDING_AI_MS = 2 * 60 * 1000;
+const RECOVERY_CLAIM_TTL_MS = 2 * 60 * 1000;
+const MAX_RECOVERY_ATTEMPTS = 3;
+const RECOVERY_BATCH_SIZE = 5;
+
 type CheckResult = 'pass' | 'fail' | 'unknown';
 type AiDecision = 'verified' | 'needs_review' | 'not_verified';
 interface VerificationCheck { id: string; result: CheckResult; reason: string; }
@@ -107,6 +113,16 @@ const GENERIC_SCHEMA = {
 
 function safeJson<T>(raw: string | null | undefined, fallback: T): T {
   try { return raw ? JSON.parse(raw) as T : fallback; } catch { return fallback; }
+}
+
+async function fetchAiWithTimeout(run: (signal: AbortSignal) => Promise<Response>): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort('ai_fetch_timeout'), AI_FETCH_TIMEOUT_MS);
+  try {
+    return await run(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function bytesToBase64(buffer: ArrayBuffer): string {
@@ -344,7 +360,7 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
   let route = 'free_router';
   if (env.FREE_ROUTER && env.TIMEPLUS_ROUTER_TOKEN) {
     try {
-      response = await env.FREE_ROUTER.fetch('https://free-router.internal/v1/chat/completions', {
+      response = await fetchAiWithTimeout((signal) => env.FREE_ROUTER.fetch('https://free-router.internal/v1/chat/completions', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -352,7 +368,8 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
           'x-free-router-session': `timeplus-proof-${submissionId}`,
         },
         body: JSON.stringify(payload),
-      });
+        signal,
+      }));
     } catch (error) {
       await recordAttempt(env, submissionId, {
         route: 'free_router', provider: null, model: null, status: 'network_error',
@@ -375,7 +392,7 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
     }
     route = 'openrouter_direct';
     try {
-      response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      response = await fetchAiWithTimeout((signal) => fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -384,7 +401,8 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
           'X-Title': 'Time+ evidence verification',
         },
         body: JSON.stringify({ ...payload, model: 'openrouter/free' }),
-      });
+        signal,
+      }));
     } catch (error) {
       await recordAttempt(env, submissionId, {
         route, provider: 'openrouter', model: 'openrouter/free', status: 'network_error',
@@ -566,3 +584,92 @@ export async function verifyEvidenceSubmission(env: Env, submissionId: string): 
     now
   ).run();
 }
+
+export async function recoverStalePendingAiEvidence(env: Env): Promise<{
+  retried: number;
+  recovered: number;
+  exhausted: number;
+  failed: number;
+}> {
+  const staleBefore = new Date(Date.now() - STALE_PENDING_AI_MS).toISOString();
+  const recentClaimAfter = new Date(Date.now() - RECOVERY_CLAIM_TTL_MS).toISOString();
+  const { results } = await env.DB.prepare(
+    `SELECT ts.id,
+            (SELECT COUNT(*) FROM ai_verification_attempts aa
+             WHERE aa.submission_id = ts.id AND aa.status = 'recovery_claimed') AS recovery_attempts
+     FROM task_submissions ts
+     JOIN task_instances ti ON ti.id = ts.task_instance_id
+     WHERE ts.verification_status = 'pending_ai'
+       AND ti.status = 'submitted'
+       AND ts.submitted_at <= ?
+       AND NOT EXISTS (
+         SELECT 1 FROM ai_verification_attempts recent
+         WHERE recent.submission_id = ts.id
+           AND recent.status = 'recovery_claimed'
+           AND recent.created_at > ?
+       )
+     ORDER BY ts.submitted_at ASC
+     LIMIT ?`
+  ).bind(staleBefore, recentClaimAfter, RECOVERY_BATCH_SIZE).all<{ id: string; recovery_attempts: number }>();
+
+  let retried = 0;
+  let recovered = 0;
+  let exhausted = 0;
+  let failed = 0;
+
+  for (const row of results || []) {
+    const priorAttempts = Number(row.recovery_attempts || 0);
+    if (priorAttempts >= MAX_RECOVERY_ATTEMPTS) {
+      await updateManualFallback(
+        env,
+        row.id,
+        'ai_unavailable',
+        'אימות ה-AI לא הושלם לאחר מספר ניסיונות; התיעוד נשמר לבדיקה ידנית.',
+        { decision: 'needs_review', riskFlags: ['ai_retry_exhausted'] }
+      );
+      exhausted++;
+      continue;
+    }
+
+    await recordAttempt(env, row.id, {
+      route: 'cron_recovery',
+      provider: null,
+      model: null,
+      status: 'recovery_claimed',
+      latencyMs: 0,
+      result: { attempt: priorAttempts + 1, staleBefore },
+    });
+    retried++;
+
+    try {
+      await verifyEvidenceSubmission(env, row.id);
+      const current = await env.DB.prepare(
+        `SELECT verification_status FROM task_submissions WHERE id = ?`
+      ).bind(row.id).first<{ verification_status: string }>();
+      if (current?.verification_status !== 'pending_ai') recovered++;
+    } catch (error) {
+      failed++;
+      await recordAttempt(env, row.id, {
+        route: 'cron_recovery',
+        provider: null,
+        model: null,
+        status: 'recovery_error',
+        latencyMs: 0,
+        result: { error: String(error), attempt: priorAttempts + 1 },
+      });
+      if (priorAttempts + 1 >= MAX_RECOVERY_ATTEMPTS) {
+        await updateManualFallback(
+          env,
+          row.id,
+          'ai_unavailable',
+          'אימות ה-AI נכשל שוב ושוב; התיעוד נשמר לבדיקה ידנית.',
+          { decision: 'needs_review', riskFlags: ['ai_retry_exhausted'] }
+        );
+        exhausted++;
+      }
+    }
+  }
+
+  return { retried, recovered, exhausted, failed };
+}
+
