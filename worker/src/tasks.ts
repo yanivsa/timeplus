@@ -1,6 +1,6 @@
 import { TaskTemplate, TaskInstance, ScheduleType, TaskStatus } from './types';
 import { generateId } from './crypto';
-import { getIsraelDateString, getIsraelDayOfWeek, getIsraelDayDiff, getIsraelTimeString } from './timezone';
+import { getIsraelDateString, getIsraelDateOffset, getIsraelDayOfWeek, getIsraelTimeString } from './timezone';
 import { calculateTaskXp, getRankDetails } from './gamification';
 
 export async function ensureDailyTaskInstances(
@@ -311,48 +311,34 @@ export async function approveTask(
   const storedRewardMinutes = instance.task_kind === 'mandatory' ? instance.reward_minutes : rewardMinutes;
   const now = new Date().toISOString();
   const todayIsrael = getIsraelDateString();
+  const yesterdayIsrael = getIsraelDateOffset(-1);
   const approvalOperationId = generateId();
   const txId = rewardMinutes > 0 ? generateId() : null;
   const xpAwarded = calculateTaskXp(instance.reward_minutes, instance.requires_photo === 1);
-
-  const existingProgress = await db
-    .prepare(`SELECT level, xp, current_streak_days, best_streak_days, last_active_date FROM child_progress WHERE child_id = ?`)
-    .bind(instance.child_id)
-    .first<{
-      level: number;
-      xp: number;
-      current_streak_days: number;
-      best_streak_days: number;
-      last_active_date: string | null;
-    }>();
-
-  const progress = existingProgress || {
-    level: 1,
-    xp: 0,
-    current_streak_days: 0,
-    best_streak_days: 0,
-    last_active_date: null,
-  };
-  const oldXp = Number(progress.xp || 0);
-  const newXp = oldXp + xpAwarded;
-  const oldRank = getRankDetails(oldXp);
-  const newRank = getRankDetails(newXp);
-  const isLevelUp = newRank.level > oldRank.level;
-
-  let newStreak = Number(progress.current_streak_days || 0);
-  if (!progress.last_active_date) {
-    newStreak = 1;
-  } else {
-    const diff = getIsraelDayDiff(progress.last_active_date, todayIsrael);
-    if (diff === 1) newStreak += 1;
-    else if (diff !== 0) newStreak = 1;
-  }
-  const bestStreak = Math.max(Number(progress.best_streak_days || 0), newStreak);
   const operationGuard = `EXISTS (
     SELECT 1 FROM task_instances ti
     WHERE ti.id = ? AND ti.family_id = ? AND ti.status = 'approved'
       AND ti.approval_operation_id = ?
   )`;
+  const levelForXp = (xpExpression: string) => `CASE
+    WHEN ${xpExpression} >= 2000 THEN 8
+    WHEN ${xpExpression} >= 1400 THEN 7
+    WHEN ${xpExpression} >= 1000 THEN 6
+    WHEN ${xpExpression} >= 700 THEN 5
+    WHEN ${xpExpression} >= 450 THEN 4
+    WHEN ${xpExpression} >= 250 THEN 3
+    WHEN ${xpExpression} >= 100 THEN 2
+    ELSE 1 END`;
+  const previousLevelSql = levelForXp(`MAX(0, cp.xp - ${Number(xpAwarded)})`);
+  const rankTitleSql = `CASE cp.level
+    WHEN 8 THEN 'שליט הנצח'
+    WHEN 7 THEN 'רב-מג הזמן'
+    WHEN 6 THEN 'שומר הממדים'
+    WHEN 5 THEN 'אמן הזמן'
+    WHEN 4 THEN 'קוסם שעה'
+    WHEN 3 THEN 'מכוון הכוכבים'
+    WHEN 2 THEN 'מחזיק השעון'
+    ELSE 'שוליית הזמן' END`;
 
   const approvalStatements = [
     db.prepare(
@@ -405,23 +391,22 @@ export async function approveTask(
         child_id, family_id, level, xp, current_streak_days, best_streak_days, last_active_date, updated_at
       )
       SELECT ?, ?, 1, 0, 0, 0, NULL, ? WHERE ${operationGuard}`
-    ).bind(
-      instance.child_id,
-      parentFamilyId,
-      now,
-      instanceId,
-      parentFamilyId,
-      approvalOperationId
-    ),
+    ).bind(instance.child_id, parentFamilyId, now, instanceId, parentFamilyId, approvalOperationId),
     db.prepare(
       `UPDATE child_progress
-       SET level = ?, xp = ?, current_streak_days = ?, best_streak_days = ?, last_active_date = ?, updated_at = ?
+       SET xp = xp + ?,
+           current_streak_days = CASE
+             WHEN last_active_date IS NULL THEN 1
+             WHEN last_active_date = ? THEN current_streak_days
+             WHEN last_active_date = ? THEN current_streak_days + 1
+             ELSE 1 END,
+           last_active_date = ?,
+           updated_at = ?
        WHERE child_id = ? AND family_id = ? AND ${operationGuard}`
     ).bind(
-      newRank.level,
-      newXp,
-      newStreak,
-      bestStreak,
+      xpAwarded,
+      todayIsrael,
+      yesterdayIsrael,
       todayIsrael,
       now,
       instance.child_id,
@@ -431,27 +416,38 @@ export async function approveTask(
       approvalOperationId
     ),
     db.prepare(
+      `UPDATE child_progress
+       SET level = ${levelForXp('xp')},
+           best_streak_days = MAX(best_streak_days, current_streak_days),
+           updated_at = ?
+       WHERE child_id = ? AND family_id = ? AND ${operationGuard}`
+    ).bind(now, instance.child_id, parentFamilyId, instanceId, parentFamilyId, approvalOperationId),
+    db.prepare(
       `INSERT INTO reward_events (
         id, family_id, child_id, type, title, body, minutes_delta, xp_delta,
         level_before, level_after, streak_days, task_instance_id, seen_at, created_at
       )
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ? WHERE ${operationGuard}`
+      SELECT ?, ?, cp.child_id,
+             CASE WHEN cp.level > ${previousLevelSql} THEN 'level_up' ELSE 'task_approved' END,
+             CASE WHEN cp.level > ${previousLevelSql}
+                  THEN printf('עלית לרמה %d! %s', cp.level, ${rankTitleSql})
+                  ELSE ? END,
+             ?, ?, ?, ${previousLevelSql}, cp.level, cp.current_streak_days, ?, NULL, ?
+      FROM child_progress cp
+      WHERE cp.child_id = ? AND cp.family_id = ? AND ${operationGuard}`
     ).bind(
       generateId(),
       parentFamilyId,
-      instance.child_id,
-      isLevelUp ? 'level_up' : 'task_approved',
-      isLevelUp ? `עלית לרמה ${newRank.level}! ${newRank.rankTitle}` : `כל הכבוד! ${instance.title} אושר`,
+      `כל הכבוד! ${instance.title} אושר`,
       rewardMinutes > 0
         ? `קיבלת ${rewardMinutes} דקות מסך ו-${xpAwarded} נקודות קסם!`
         : `קיבלת ${xpAwarded} נקודות קסם על משימת חובה!`,
       rewardMinutes,
       xpAwarded,
-      oldRank.level,
-      newRank.level,
-      newStreak,
       instanceId,
       now,
+      instance.child_id,
+      parentFamilyId,
       instanceId,
       parentFamilyId,
       approvalOperationId
@@ -486,7 +482,7 @@ export async function approveTask(
       actor === 'system' ? 'system' : 'parent',
       actor === 'system' ? 'ai_verifier' : 'parent',
       instanceId,
-      JSON.stringify({ rewardMinutes, xpAwarded, levelUp: isLevelUp, approvalOperationId }),
+      JSON.stringify({ rewardMinutes, xpAwarded, approvalOperationId }),
       now,
       instanceId,
       parentFamilyId,
