@@ -7,39 +7,35 @@ export function getIsraelDateString(date: Date = new Date()): string {
     month: '2-digit',
     day: '2-digit',
   });
-  return formatter.format(date); // outputs YYYY-MM-DD
+  return formatter.format(date);
 }
 
 export function getIsraelDayOfWeek(date: Date = new Date()): number {
-  // Use Israeli calendar convention: 0 = Sunday, 1 = Monday, ..., 6 = Saturday
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: ISRAEL_TIMEZONE,
     weekday: 'short',
   });
   const weekday = formatter.format(date);
   switch (weekday) {
-    case 'Sun':
-      return 0;
-    case 'Mon':
-      return 1;
-    case 'Tue':
-      return 2;
-    case 'Wed':
-      return 3;
-    case 'Thu':
-      return 4;
-    case 'Fri':
-      return 5;
-    case 'Sat':
-      return 6;
-    default:
-      return 0;
+    case 'Sun': return 0;
+    case 'Mon': return 1;
+    case 'Tue': return 2;
+    case 'Wed': return 3;
+    case 'Thu': return 4;
+    case 'Fri': return 5;
+    case 'Sat': return 6;
+    default: return 0;
   }
 }
 
+function shiftIsoDate(dateStr: string, daysOffset: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + daysOffset, 12, 0, 0));
+  return shifted.toISOString().slice(0, 10);
+}
+
 export function getIsraelDateOffset(daysOffset: number, baseDate: Date = new Date()): string {
-  const d = new Date(baseDate.getTime() + daysOffset * 86400000);
-  return getIsraelDateString(d);
+  return shiftIsoDate(getIsraelDateString(baseDate), daysOffset);
 }
 
 export function getIsraelDayDiff(olderDateStr: string, newerDateStr: string): number {
@@ -51,15 +47,57 @@ export function getIsraelDayDiff(olderDateStr: string, newerDateStr: string): nu
 }
 
 export function getIsraelStartOfWeek(date: Date = new Date()): string {
-  const dayOfWeek = getIsraelDayOfWeek(date); // 0 (Sun) to 6 (Sat)
-  return getIsraelDateOffset(-dayOfWeek, date);
+  return getIsraelDateOffset(-getIsraelDayOfWeek(date), date);
 }
 
 export function getIsraelStartOfMonth(date: Date = new Date()): string {
-  const dateStr = getIsraelDateString(date);
-  return dateStr.substring(0, 8) + '01';
+  return getIsraelDateString(date).substring(0, 8) + '01';
 }
 
+const israelDateTimeFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: ISRAEL_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+});
+
+function israelLocalMidnightUtcIso(dateStr: string): string {
+  const [targetYear, targetMonth, targetDay] = dateStr.split('-').map(Number);
+  const targetWallClockAsUtc = Date.UTC(targetYear, targetMonth - 1, targetDay, 0, 0, 0);
+  let guess = targetWallClockAsUtc;
+
+  for (let i = 0; i < 4; i++) {
+    const parts = israelDateTimeFormatter.formatToParts(new Date(guess));
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const observedWallClockAsUtc = Date.UTC(
+      Number(values.year),
+      Number(values.month) - 1,
+      Number(values.day),
+      Number(values.hour),
+      Number(values.minute),
+      Number(values.second)
+    );
+    const correction = targetWallClockAsUtc - observedWallClockAsUtc;
+    guess += correction;
+    if (Math.abs(correction) < 1000) break;
+  }
+
+  return new Date(guess).toISOString();
+}
+
+export function getIsraelUtcRange(
+  startDateInclusive: string,
+  endDateExclusive: string
+): { startUtc: string; endUtc: string } {
+  return {
+    startUtc: israelLocalMidnightUtcIso(startDateInclusive),
+    endUtc: israelLocalMidnightUtcIso(endDateExclusive),
+  };
+}
 
 export function getIsraelTimeString(date: Date = new Date()): string {
   return new Intl.DateTimeFormat('en-GB', {

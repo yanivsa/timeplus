@@ -268,10 +268,15 @@ export default {
     if (pathname === '/api/auth/logout' && method === 'POST') {
       const cookieHeader = request.headers.get('Cookie');
       const cookies = parseCookies(cookieHeader);
-      const token = cookies['timeplus_session'];
-      if (token) {
-        await deleteSession(env.DB, token);
-      }
+      const cookieToken = cookies['timeplus_session'] || null;
+      const authHeader = request.headers.get('Authorization');
+      const bearerToken = authHeader?.startsWith('Bearer ')
+        ? authHeader.substring(7).trim() || null
+        : null;
+
+      const tokensToRevoke = [...new Set([cookieToken, bearerToken].filter((token): token is string => Boolean(token)))];
+      await Promise.all(tokensToRevoke.map((token) => deleteSession(env.DB, token)));
+
       return json({ success: true }, 200, { 'Set-Cookie': clearSessionCookie() });
     }
 
@@ -833,6 +838,7 @@ export default {
                     : `המשימה "${task.title}" לא אושרה כרגע`,
                   entityType: 'task_instance',
                   entityId: instanceId,
+                  skipDbInsert: true,
                 });
               }
             } catch (err) {
@@ -1233,6 +1239,7 @@ export default {
         const { results: tasks } = await env.DB.prepare(
           `SELECT ti.*, ts.status as submission_status, ts.note as submission_note, ts.photo_object_key
            FROM task_instances ti
+           LEFT JOIN task_templates tt ON tt.id = ti.template_id
            LEFT JOIN task_submissions ts ON ts.task_instance_id = ti.id AND ts.status = 'pending'
            WHERE ti.child_id = ? AND (
              ti.due_date = ?

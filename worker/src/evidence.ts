@@ -368,30 +368,63 @@ async function completeEvidenceSubmission(
   const hasRequiredEvidence = submission.media_kind === 'video'
     ? assets.some((asset: any) => asset.kind === 'original')
     : assets.some((asset: any) => asset.kind === 'normalized' || asset.kind === 'original');
-
   if (!hasRequiredEvidence) return errorJson('לא הועלתה ראיה תקינה', 400);
-
-  const now = new Date().toISOString();
-  const taskUpdate = await env.DB
-    .prepare(
-      `UPDATE task_instances
-       SET status = 'submitted', submitted_at = ?, updated_at = ?
-       WHERE id = ? AND child_id = ? AND family_id = ? AND (status = 'open' OR status = 'rejected')`
-    )
-    .bind(now, now, submission.task_instance_id, user.id, user.familyId)
-    .run();
-
-  if (taskUpdate.meta.changes === 0) return errorJson('המשימה כבר נמצאת בטיפול', 409);
 
   const duplicateDetected = assets.some((asset: any) => Boolean(asset.duplicate_of_asset_id));
   const aiEligible = submission.verification_mode === 'ai_media' && String(env.AI_EVIDENCE_ENABLED || 'true') === 'true';
   const nextStatus = duplicateDetected ? 'needs_parent_review' : aiEligible ? 'pending_ai' : 'needs_parent_review';
-  const summary = duplicateDetected ? 'זוהתה ראיה זהה לראיה קודמת; נדרשת בדיקת הורה.' : aiEligible ? 'הראיה נשמרה ונשלחה לאימות אוטומטי.' : 'הראיה נשמרה וממתינה לבדיקת הורה.';
-  await env.DB.prepare(`UPDATE task_submissions SET verification_status = ?, verification_route = ?, verification_summary = ?, review_mode = 'parent', retention_hold = 1 WHERE id = ?`).bind(nextStatus, aiEligible && !duplicateDetected ? 'free_router' : 'none', summary, submissionId).run();
+  const summary = duplicateDetected
+    ? 'זוהתה ראיה זהה לראיה קודמת; נדרשת בדיקת הורה.'
+    : aiEligible
+    ? 'הראיה נשמרה ונשלחה לאימות אוטומטי.'
+    : 'הראיה נשמרה וממתינה לבדיקת הורה.';
+  const now = new Date().toISOString();
+  const operationId = generateId();
+
+  const transitionResults = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE task_instances
+       SET status = 'submitted', submitted_at = ?, submission_operation_id = ?, updated_at = ?
+       WHERE id = ? AND child_id = ? AND family_id = ? AND (status = 'open' OR status = 'rejected')`
+    ).bind(now, operationId, now, submission.task_instance_id, user.id, user.familyId),
+    env.DB.prepare(
+      `UPDATE task_submissions
+       SET verification_status = ?, verification_route = ?, verification_summary = ?,
+           review_mode = 'parent', retention_hold = 1
+       WHERE id = ? AND verification_status = 'uploading'
+         AND EXISTS (
+           SELECT 1 FROM task_instances ti
+           WHERE ti.id = ? AND ti.child_id = ? AND ti.family_id = ?
+             AND ti.status = 'submitted' AND ti.submission_operation_id = ?
+         )`
+    ).bind(
+      nextStatus,
+      aiEligible && !duplicateDetected ? 'free_router' : 'none',
+      summary,
+      submissionId,
+      submission.task_instance_id,
+      user.id,
+      user.familyId,
+      operationId
+    ),
+  ]);
+
+  if (
+    Number((transitionResults[0] as any)?.meta?.changes || 0) === 0 ||
+    Number((transitionResults[1] as any)?.meta?.changes || 0) === 0
+  ) {
+    return errorJson('המשימה כבר נמצאת בטיפול', 409);
+  }
+
   if (aiEligible && !duplicateDetected) {
     ctx.waitUntil(verifyEvidenceSubmission(env, submissionId).catch(async (err) => {
       console.error('Evidence AI verification failed', err);
-      await env.DB.prepare(`UPDATE task_submissions SET verification_status='ai_unavailable', review_mode='parent', verification_summary='שירות האימות לא היה זמין; התיעוד נשמר לבדיקה ידנית.' WHERE id=? AND verification_status='pending_ai'`).bind(submissionId).run().catch(() => undefined);
+      await env.DB.prepare(
+        `UPDATE task_submissions
+         SET verification_status='ai_unavailable', review_mode='parent',
+             verification_summary='שירות האימות לא היה זמין; התיעוד נשמר לבדיקה ידנית.'
+         WHERE id=? AND verification_status='pending_ai'`
+      ).bind(submissionId).run().catch(() => undefined);
     }));
   }
 
@@ -412,6 +445,7 @@ async function completeEvidenceSubmission(
         mediaSource: submission.media_source,
         assetCount: assets.length,
         duplicateDetected,
+        operationId,
       }),
       now
     )
