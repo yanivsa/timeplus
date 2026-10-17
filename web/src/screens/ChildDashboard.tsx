@@ -101,7 +101,7 @@ export const ChildDashboard: React.FC = () => {
 
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') loadDashboard();
-    }, 60000);
+    }, 10000);
 
     document.addEventListener('visibilitychange', syncWhenForegrounded);
     window.addEventListener('focus', syncWhenForegrounded);

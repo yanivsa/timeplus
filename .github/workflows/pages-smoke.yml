@@ -15,7 +15,7 @@ on:
 jobs:
   smoke:
     name: Pages + Worker service-binding smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Wait for Pages deployment
         run: sleep 20
