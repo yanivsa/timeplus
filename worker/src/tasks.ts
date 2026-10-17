@@ -367,11 +367,18 @@ export async function approveTask(
   if (instance.status === 'approved') return { success: false, error: 'המשימה כבר אושרה בעבר' };
   if (instance.status !== 'submitted') return { success: false, error: 'ניתן לאשר רק משימות שהוגשו' };
 
+  if (
+    customRewardMinutes !== undefined &&
+    (!Number.isSafeInteger(customRewardMinutes) || customRewardMinutes < 0)
+  ) {
+    return { success: false, error: 'מספר הדקות לאישור חייב להיות מספר שלם ולא שלילי' };
+  }
+
   const rewardMinutes =
     instance.task_kind === 'mandatory'
       ? 0
-      : typeof customRewardMinutes === 'number' && !isNaN(customRewardMinutes)
-      ? Math.max(0, customRewardMinutes)
+      : customRewardMinutes !== undefined
+      ? customRewardMinutes
       : instance.reward_minutes;
 
   const storedRewardMinutes = instance.task_kind === 'mandatory' ? instance.reward_minutes : rewardMinutes;
