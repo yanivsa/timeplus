@@ -42,7 +42,7 @@ test('repeatable task generation copies every AI verification field', () => {
     assert.match(ensureRepeatable, new RegExp(field), `ensureDailyTaskInstances repeatable insert must copy ${field}`);
   }
 
-  const submitRepeatable = between(source.tasks, "if (tpl && tpl.schedule_type === 'repeatable')", 'return { success: true };');
+  const submitRepeatable = between(source.tasks, 'export async function submitTask', 'export async function approveTask');
   for (const field of ['verification_mode', 'verification_rules_json', 'allow_video_proof', 'auto_approve_enabled', 'max_daily_auto_awards']) {
     assert.match(submitRepeatable, new RegExp(field), `submitTask repeatable insert must copy ${field}`);
   }
