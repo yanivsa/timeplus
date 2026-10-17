@@ -133,7 +133,11 @@ async function creditPendingCorrectAnswers(env, profileId, localSnapshot, remote
   // Cursor is updated only after every candidate has been processed successfully.
   // If any D1 operation fails, the next sync retries the same range; syncId keeps it idempotent.
   for (const record of records) {
-    if (record.isCorrect !== true) continue;
+    if (
+      record.isCorrect !== true ||
+      record.correctFirstTry !== true ||
+      Number(record.attempts) !== 1
+    ) continue;
 
     const timestamp = Number(record.timestamp || 0);
     if (!Number.isFinite(timestamp) || timestamp < Number(link.enabled_from_ms)) continue;
