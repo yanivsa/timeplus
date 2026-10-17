@@ -20,6 +20,7 @@ export interface SetupPayload {
 }
 
 const PIN_PATTERN = /^\d{4,8}$/;
+const SETUP_LEASE_MS = 5 * 60 * 1000;
 
 const starterTemplates = [
   {
@@ -135,9 +136,33 @@ export async function initializeFamily(
     id: generateId(),
   }));
 
-  // Recover only an abandoned, uninitialized setup. Never delete an active
-  // family that already completed initialization.
-  await db.prepare(`DELETE FROM families WHERE id = ? AND is_initialized = 0`).bind(familyId).run();
+  // Treat a recent uninitialized family row as an active setup lease. Only a
+  // stale lease may be cleaned up, and the delete uses the exact timestamp we
+  // observed so two recovery attempts cannot delete each other's work.
+  const existingSetup = await db
+    .prepare(`SELECT is_initialized, updated_at FROM families WHERE id = ?`)
+    .bind(familyId)
+    .first<{ is_initialized: number; updated_at: string }>();
+
+  if (existingSetup?.is_initialized === 1) {
+    return { success: false, error: 'המערכת כבר אותחלה בעבר' };
+  }
+
+  if (existingSetup) {
+    const updatedAtMs = Date.parse(existingSetup.updated_at);
+    const leaseIsActive = Number.isFinite(updatedAtMs) && Date.now() - updatedAtMs < SETUP_LEASE_MS;
+    if (leaseIsActive) {
+      return { success: false, error: 'אתחול המשפחה כבר מתבצע' };
+    }
+
+    const cleanup = await db
+      .prepare(`DELETE FROM families WHERE id = ? AND is_initialized = 0 AND updated_at = ?`)
+      .bind(familyId, existingSetup.updated_at)
+      .run();
+    if (Number(cleanup.meta.changes || 0) !== 1) {
+      return { success: false, error: 'אתחול המשפחה כבר מתבצע' };
+    }
+  }
 
   const setupStatements: D1PreparedStatement[] = [
     db.prepare(
@@ -186,7 +211,21 @@ export async function initializeFamily(
 
   // D1 batches are transactional: either the setup core is durable as a whole,
   // or none of it is. The family intentionally remains is_initialized=0.
-  await db.batch(setupStatements);
+  try {
+    await db.batch(setupStatements);
+  } catch (error) {
+    const competingSetup = await db
+      .prepare(`SELECT is_initialized, updated_at FROM families WHERE id = ?`)
+      .bind(familyId)
+      .first<{ is_initialized: number; updated_at: string }>();
+    if (competingSetup) {
+      return {
+        success: false,
+        error: competingSetup.is_initialized === 1 ? 'המערכת כבר אותחלה בעבר' : 'אתחול המשפחה כבר מתבצע',
+      };
+    }
+    throw error;
+  }
 
   await ensureDailyTaskInstances(db, familyId);
   const { token } = await createSession(db, familyId, 'parent');
