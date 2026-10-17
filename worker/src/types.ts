@@ -8,6 +8,7 @@ export interface Env {
   PEPPER_SECRET?: string;
   LEGACY_PEPPER_SECRET?: string;
   INIT_SECRET?: string;
+  ALLOW_INSECURE_INIT?: string;
   PHOTOS?: R2Bucket;
   EVIDENCE?: R2Bucket;
   EVIDENCE_KV?: KVNamespace;
