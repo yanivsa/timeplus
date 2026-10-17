@@ -29,6 +29,9 @@ jobs:
       - name: Install JS dependencies
         run: npm ci
 
+      - name: Test dashboard refresh and Academy sync resilience
+        run: node --test web/tests/dashboard-refresh.test.mjs worker/tests/academy-sync-resilience.test.mjs
+
       - name: Build web frontend
         run: npm run build:web
 
