@@ -2,6 +2,21 @@ const MAX_BODY_BYTES = 900000;
 const MAX_RECORDS_PER_STORE = 20000;
 const AUTO_PROFILES = new Set(['ori', 'eitan', 'ayala']);
 
+
+function isExamPrepRecord(record) {
+  return Boolean(record && (record.source === 'exam_prep' || record.subject === 'exam_prep'));
+}
+
+function isRewardEligibleRecord(record) {
+  return Boolean(
+    record &&
+    record.isCorrect === true &&
+    record.correctFirstTry === true &&
+    Number(record.attempts) === 1 &&
+    !isExamPrepRecord(record)
+  );
+}
+
 function reply(payload, status = 200) {
   return Response.json(payload, {
     status,
@@ -109,6 +124,31 @@ function buildRewardCandidates(localSnapshot, remoteSnapshot, mergedSnapshot, la
   };
 }
 
+function addMissingEligibleRewardCandidates(records, mergedSnapshot, creditedKeys, enabledFromMs) {
+  const candidates = new Map();
+  const durableCredits = creditedKeys && typeof creditedKeys.has === 'function' ? creditedKeys : new Set();
+
+  for (const record of Array.isArray(records) ? records : []) {
+    if (!record || typeof record !== 'object') continue;
+    const syncId = eventKey(record, 'questionHistory');
+    if (!syncId || durableCredits.has(syncId)) continue;
+    candidates.set(syncId, record);
+  }
+
+  const history = Array.isArray(mergedSnapshot?.questionHistory) ? mergedSnapshot.questionHistory : [];
+  for (const record of history) {
+    if (!isRewardEligibleRecord(record)) continue;
+    const timestamp = Number(record.timestamp || 0);
+    if (!Number.isFinite(timestamp) || timestamp < Number(enabledFromMs)) continue;
+    const syncId = eventKey(record, 'questionHistory');
+    if (!syncId || durableCredits.has(syncId)) continue;
+    candidates.set(syncId, record);
+  }
+
+  return [...candidates.values()];
+}
+
+
 async function creditPendingCorrectAnswers(env, profileId, localSnapshot, remoteSnapshot, mergedSnapshot) {
   if (!env.TIMEPLUS_DB) return { credited: 0, scanned: 0, cursor: null };
 
@@ -128,16 +168,27 @@ async function creditPendingCorrectAnswers(env, profileId, localSnapshot, remote
     link.last_history_index
   );
 
+  const durableCreditRows = await env.TIMEPLUS_DB
+    .prepare('SELECT sync_id FROM learning_reward_credits WHERE profile_key = ?')
+    .bind(profileId)
+    .all();
+  const durableCreditKeys = new Set(
+    (durableCreditRows?.results || [])
+      .map(row => String(row?.sync_id || ''))
+      .filter(Boolean)
+  );
+  const candidateRecords = addMissingEligibleRewardCandidates(
+    records,
+    mergedSnapshot,
+    durableCreditKeys,
+    link.enabled_from_ms
+  );
+
   let credited = 0;
 
-  // Cursor is updated only after every candidate has been processed successfully.
-  // If any D1 operation fails, the next sync retries the same range; syncId keeps it idempotent.
-  for (const record of records) {
-    if (
-      record.isCorrect !== true ||
-      record.correctFirstTry !== true ||
-      Number(record.attempts) !== 1
-    ) continue;
+  // Reconcile durable credit IDs so a transient Time+ write failure self-heals.
+  for (const record of candidateRecords) {
+    if (!isRewardEligibleRecord(record)) continue;
 
     const timestamp = Number(record.timestamp || 0);
     if (!Number.isFinite(timestamp) || timestamp < Number(link.enabled_from_ms)) continue;
@@ -177,7 +228,7 @@ async function creditPendingCorrectAnswers(env, profileId, localSnapshot, remote
       .run();
   }
 
-  return { credited, scanned: records.length, cursor: newCursor };
+  return { credited, scanned: candidateRecords.length, cursor: newCursor };
 }
 
 async function ensureAccount(db, profileId) {
@@ -220,32 +271,45 @@ async function handlePost(context) {
   if (!/^[a-z0-9_-]{1,40}$/i.test(profileId)) return reply({ error: 'invalid_request' }, 400);
   if (!validateSnapshot(body.snapshot, profileId)) return reply({ error: 'invalid_snapshot' }, 400);
 
-  const account = await ensureAccount(context.env.AHAVA_DB, profileId);
-  if (!account) return reply({ error: 'unknown_profile' }, 404);
-
   let remoteSnapshot = null;
-  if (account.snapshot_json) {
-    try {
-      remoteSnapshot = JSON.parse(account.snapshot_json);
-    } catch {
-      return reply({ error: 'corrupt_remote_snapshot' }, 500);
+  let merged = null;
+  let nextRevision = null;
+  let persisted = false;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const account = await ensureAccount(context.env.AHAVA_DB, profileId);
+    if (!account) return reply({ error: 'unknown_profile' }, 404);
+
+    remoteSnapshot = null;
+    if (account.snapshot_json) {
+      try {
+        remoteSnapshot = JSON.parse(account.snapshot_json);
+      } catch {
+        return reply({ error: 'corrupt_remote_snapshot' }, 500);
+      }
+    }
+
+    merged = body.mode === 'replace' ? body.snapshot : mergeSnapshots(body.snapshot, remoteSnapshot);
+    nextRevision = Number(account.revision || 0) + 1;
+    const serialized = JSON.stringify(merged);
+    if (serialized.length > MAX_BODY_BYTES) return reply({ error: 'snapshot_too_large' }, 413);
+
+    const saveResult = await context.env.AHAVA_DB
+      .prepare(
+        'UPDATE ahava_sync_profiles SET snapshot_json = ?1, revision = ?2, updated_at = ?3, token_hash = ?4 WHERE profile_id = ?5 AND revision = ?6'
+      )
+      .bind(serialized, nextRevision, Date.now(), 'passwordless:v1', profileId, Number(account.revision || 0))
+      .run();
+
+    if (Number(saveResult?.meta?.changes || 0) > 0) {
+      persisted = true;
+      break;
     }
   }
 
-  const merged = body.mode === 'replace' ? body.snapshot : mergeSnapshots(body.snapshot, remoteSnapshot);
-  const nextRevision = Number(account.revision || 0) + 1;
-  const serialized = JSON.stringify(merged);
-
-  if (serialized.length > MAX_BODY_BYTES) return reply({ error: 'snapshot_too_large' }, 413);
-
-  // Persist Academy first. If Time+ then fails, we return a retryable 503;
-  // the reward cursor is not advanced, so the next sync safely retries.
-  await context.env.AHAVA_DB
-    .prepare(
-      'UPDATE ahava_sync_profiles SET snapshot_json = ?1, revision = ?2, updated_at = ?3, token_hash = ?4 WHERE profile_id = ?5'
-    )
-    .bind(serialized, nextRevision, Date.now(), 'passwordless:v1', profileId)
-    .run();
+  if (!persisted || !merged || nextRevision === null) {
+    return reply({ error: 'concurrent_sync_retry' }, 503);
+  }
 
   let rewardSync = { credited: 0, scanned: 0, cursor: null };
   if (context.env.TIMEPLUS_DB) {
