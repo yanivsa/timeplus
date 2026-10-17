@@ -36,6 +36,9 @@ jobs:
       - name: Test Israel timezone UI contract
         run: node --test web/tests/israel-timezone.test.mjs
 
+      - name: Test dashboard refresh and Academy sync resilience
+        run: node --test web/tests/dashboard-refresh.test.mjs worker/tests/academy-sync-resilience.test.mjs
+
       - name: Test task creation and repeatable-task regressions
         run: node --test web/tests/task-creation-regression.test.mjs
 
