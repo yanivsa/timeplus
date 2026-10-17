@@ -19,6 +19,8 @@ const source = {
 
 const migrationUrl = new URL('../migrations/0008_production_hardening.sql', import.meta.url);
 const migration = existsSync(migrationUrl) ? readFileSync(migrationUrl, 'utf8') : '';
+const consistencyMigrationUrl = new URL('../migrations/0009_consistency_security_hardening.sql', import.meta.url);
+const consistencyMigration = existsSync(consistencyMigrationUrl) ? readFileSync(consistencyMigrationUrl, 'utf8') : '';
 
 function between(text, start, end) {
   const a = text.indexOf(start);
@@ -40,7 +42,7 @@ test('repeatable task generation copies every AI verification field', () => {
     assert.match(ensureRepeatable, new RegExp(field), `ensureDailyTaskInstances repeatable insert must copy ${field}`);
   }
 
-  const submitRepeatable = between(source.tasks, "if (tpl && tpl.schedule_type === 'repeatable')", 'return { success: true };');
+  const submitRepeatable = between(source.tasks, 'export async function submitTask', 'export async function approveTask');
   for (const field of ['verification_mode', 'verification_rules_json', 'allow_video_proof', 'auto_approve_enabled', 'max_daily_auto_awards']) {
     assert.match(submitRepeatable, new RegExp(field), `submitTask repeatable insert must copy ${field}`);
   }
@@ -51,6 +53,14 @@ test('production hardening migration enforces one correction and one active time
   assert.match(migration, /CREATE TABLE IF NOT EXISTS screen_usage_corrections/i);
   assert.match(migration, /usage_log_id\s+TEXT\s+NOT NULL\s+UNIQUE/i);
   assert.match(migration, /CREATE UNIQUE INDEX[\s\S]*screen_sessions\s*\(\s*child_id\s*\)[\s\S]*WHERE status IN \('running','paused'\)/i);
+});
+
+test('consistency hardening migration adds DB-enforced task generation and review operation invariants', () => {
+  assert.ok(consistencyMigration, '0009_consistency_security_hardening.sql must exist');
+  assert.match(consistencyMigration, /ALTER TABLE task_instances ADD COLUMN generation_key TEXT/i);
+  assert.match(consistencyMigration, /ALTER TABLE task_instances ADD COLUMN rejection_operation_id TEXT/i);
+  assert.match(consistencyMigration, /ALTER TABLE task_submissions ADD COLUMN evidence_review_operation_id TEXT/i);
+  assert.match(consistencyMigration, /CREATE UNIQUE INDEX[\s\S]*task_instances\s*\(\s*generation_key\s*\)[\s\S]*WHERE generation_key IS NOT NULL/i);
 });
 
 test('usage correction claims once and refunds atomically with arithmetic balance update', () => {

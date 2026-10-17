@@ -3,6 +3,24 @@ import { generateId } from './crypto';
 import { getIsraelDateString, getIsraelDateOffset, getIsraelDayOfWeek, getIsraelTimeString } from './timezone';
 import { calculateTaskXp, getRankDetails } from './gamification';
 
+type SubmissionTemplate = {
+  schedule_type: string;
+  title: string;
+  description: string | null;
+  reward_minutes: number;
+  requires_photo: number;
+  task_kind: 'mandatory' | 'bonus';
+  verification_mode: 'manual' | 'ai_media';
+  verification_rules_json: string | null;
+  allow_video_proof: number;
+  auto_approve_enabled: number;
+  max_daily_auto_awards: number | null;
+  time_window_start: string | null;
+  time_window_end: string | null;
+  is_active: number;
+  archived_at: string | null;
+};
+
 export async function ensureDailyTaskInstances(
   db: D1Database,
   familyId: string,
@@ -50,65 +68,30 @@ export async function ensureDailyTaskInstances(
 
     for (const assignment of assignments) {
       if (tpl.schedule_type === 'repeatable') {
-        // For repeatable tasks, ensure there is always at least one 'open' instance available
-        const existingOpen = await db
-          .prepare(
-            `SELECT id FROM task_instances 
-             WHERE template_id = ? AND child_id = ? AND status = 'open'`
-          )
-          .bind(tpl.id, assignment.child_id)
-          .first();
+        const generationKey = `repeatable-open:${tpl.id}:${assignment.child_id}`;
 
-        if (!existingOpen) {
-          const instanceId = generateId();
-          await db
-            .prepare(
-              `INSERT INTO task_instances (
-                id, family_id, template_id, child_id, title, description, 
-                reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json,
-                allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
-            )
-            .bind(
-              instanceId,
-              familyId,
-              tpl.id,
-              assignment.child_id,
-              tpl.title,
-              tpl.description,
-              tpl.reward_minutes,
-              tpl.requires_photo,
-              tpl.task_kind || 'bonus',
-              tpl.verification_mode || 'manual',
-              tpl.verification_rules_json || null,
-              Number(tpl.allow_video_proof || 0),
-              Number(tpl.auto_approve_enabled || 0),
-              tpl.max_daily_auto_awards ?? null,
-              targetDateStr
-            )
-            .run();
-          createdCount++;
-        }
-        continue;
-      }
+        // Adopt one legacy open row (created before generation_key existed) so
+        // rolling out this invariant cannot itself create a duplicate task.
+        await db.prepare(
+          `UPDATE task_instances
+           SET generation_key = ?
+           WHERE id = (
+             SELECT id FROM task_instances
+             WHERE template_id = ? AND child_id = ? AND status = 'open' AND generation_key IS NULL
+             ORDER BY created_at DESC, id DESC LIMIT 1
+           )
+           AND NOT EXISTS (SELECT 1 FROM task_instances WHERE generation_key = ?)`
+        ).bind(generationKey, tpl.id, assignment.child_id, generationKey).run();
 
-      // Check if instance already exists for this template, child, and date
-      const existing = await db
-        .prepare(
-          `SELECT id FROM task_instances 
-           WHERE template_id = ? AND child_id = ? AND due_date = ?`
-        )
-        .bind(tpl.id, assignment.child_id, targetDateStr)
-        .first();
-
-      if (!existing) {
         const instanceId = generateId();
-        await db
+        const inserted = await db
           .prepare(
-            `INSERT INTO task_instances (
-              id, family_id, template_id, child_id, title, description, 
-              reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json, allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+            `INSERT OR IGNORE INTO task_instances (
+              id, family_id, template_id, child_id, title, description,
+              reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json,
+              allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date,
+              generation_key, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
           )
           .bind(
             instanceId,
@@ -125,11 +108,59 @@ export async function ensureDailyTaskInstances(
             Number(tpl.allow_video_proof || 0),
             Number(tpl.auto_approve_enabled || 0),
             tpl.max_daily_auto_awards ?? null,
-            targetDateStr
+            targetDateStr,
+            generationKey
           )
           .run();
-        createdCount++;
+        createdCount += Number(inserted.meta.changes || 0);
+        continue;
       }
+
+      const generationKey = `scheduled:${tpl.id}:${assignment.child_id}:${targetDateStr}`;
+
+      // Adopt an existing legacy instance for this schedule slot before trying
+      // the idempotent insert. The unique index is the final concurrency guard.
+      await db.prepare(
+        `UPDATE task_instances
+         SET generation_key = ?
+         WHERE id = (
+           SELECT id FROM task_instances
+           WHERE template_id = ? AND child_id = ? AND due_date = ? AND generation_key IS NULL
+           ORDER BY created_at DESC, id DESC LIMIT 1
+         )
+         AND NOT EXISTS (SELECT 1 FROM task_instances WHERE generation_key = ?)`
+      ).bind(generationKey, tpl.id, assignment.child_id, targetDateStr, generationKey).run();
+
+      const instanceId = generateId();
+      const inserted = await db
+        .prepare(
+          `INSERT OR IGNORE INTO task_instances (
+            id, family_id, template_id, child_id, title, description,
+            reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json,
+            allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date,
+            generation_key, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+        )
+        .bind(
+          instanceId,
+          familyId,
+          tpl.id,
+          assignment.child_id,
+          tpl.title,
+          tpl.description,
+          tpl.reward_minutes,
+          tpl.requires_photo,
+          tpl.task_kind || 'bonus',
+          tpl.verification_mode || 'manual',
+          tpl.verification_rules_json || null,
+          Number(tpl.allow_video_proof || 0),
+          Number(tpl.auto_approve_enabled || 0),
+          tpl.max_daily_auto_awards ?? null,
+          targetDateStr,
+          generationKey
+        )
+        .run();
+      createdCount += Number(inserted.meta.changes || 0);
     }
   }
 
@@ -157,45 +188,37 @@ export async function submitTask(
     return { success: false, error: 'לא ניתן להגיש משימה שכבר הוגשה או אושרה' };
   }
 
+  let template: SubmissionTemplate | null = null;
+
   if (instance.template_id) {
-    const window = await db.prepare(
-      `SELECT time_window_start, time_window_end FROM task_templates WHERE id = ?`
-    ).bind(instance.template_id).first<{ time_window_start: string | null; time_window_end: string | null }>();
+    template = await db.prepare(
+      `SELECT schedule_type, title, description, reward_minutes, requires_photo, task_kind,
+              verification_mode, verification_rules_json, allow_video_proof, auto_approve_enabled,
+              max_daily_auto_awards, time_window_start, time_window_end, is_active, archived_at
+       FROM task_templates WHERE id = ?`
+    ).bind(instance.template_id).first<SubmissionTemplate>();
     const nowLocal = getIsraelTimeString();
-    if (window?.time_window_start && nowLocal < window.time_window_start) {
-      return { success: false, error: `המשימה נפתחת בשעה ${window.time_window_start}` };
+    if (template?.time_window_start && nowLocal < template.time_window_start) {
+      return { success: false, error: `המשימה נפתחת בשעה ${template.time_window_start}` };
     }
-    if (window?.time_window_end && nowLocal > window.time_window_end) {
-      return { success: false, error: `חלון הזמן למשימה הסתיים בשעה ${window.time_window_end}` };
+    if (template?.time_window_end && nowLocal > template.time_window_end) {
+      return { success: false, error: `חלון הזמן למשימה הסתיים בשעה ${template.time_window_end}` };
     }
   }
 
   const submissionId = generateId();
   const now = new Date().toISOString();
-
-  // Atomically update instance status
-  const updateRes = await db
-    .prepare(
-      `UPDATE task_instances 
-       SET status = 'submitted', submitted_at = ?, updated_at = ? 
-       WHERE id = ? AND (status = 'open' OR status = 'rejected')`
-    )
-    .bind(now, now, instanceId)
-    .run();
-
-  if (updateRes.meta.changes === 0) {
-    return { success: false, error: 'המשימה כבר נמצאת בטיפול' };
-  }
-
-  // Record submission
-  await db
-    .prepare(
-      `INSERT INTO task_submissions (
-        id, task_instance_id, child_id, note, photo_object_key, status, submitted_at
-      ) VALUES (?, ?, ?, ?, ?, 'pending', ?)`
-    )
-    .bind(submissionId, instanceId, childId, note, photoObjectKey, now)
-    .run();
+  const submissionOperationId = generateId();
+  const isRepeatable = Boolean(
+    instance.template_id &&
+    template?.schedule_type === 'repeatable' &&
+    template.is_active === 1 &&
+    !template.archived_at
+  );
+  const closedGenerationKey = `repeatable-closed:${instanceId}`;
+  const repeatableOpenKey = isRepeatable && instance.template_id
+    ? `repeatable-open:${instance.template_id}:${childId}`
+    : null;
 
   // Fetch child name for notification
   const child = await db
@@ -205,81 +228,124 @@ export async function submitTask(
 
   const childName = child?.name || 'הילד';
 
-  // Create notification for parents
-  await db
-    .prepare(
+  const operationGuard = `EXISTS (
+    SELECT 1 FROM task_instances ti
+    WHERE ti.id = ? AND ti.child_id = ? AND ti.status = 'submitted'
+      AND ti.submission_operation_id = ?
+  )`;
+
+  const submissionStatements: D1PreparedStatement[] = [
+    db.prepare(
+      `UPDATE task_instances
+       SET status = 'submitted', submitted_at = ?, submission_operation_id = ?,
+           generation_key = CASE WHEN ? = 1 THEN ? ELSE generation_key END,
+           updated_at = ?
+       WHERE id = ? AND child_id = ? AND (status = 'open' OR status = 'rejected')`
+    ).bind(now, submissionOperationId, isRepeatable ? 1 : 0, closedGenerationKey, now, instanceId, childId),
+    db.prepare(
+      `INSERT INTO task_submissions (
+        id, task_instance_id, child_id, note, photo_object_key, status, submitted_at
+      )
+      SELECT ?, ?, ?, ?, ?, 'pending', ? WHERE ${operationGuard}`
+    ).bind(
+      submissionId, instanceId, childId, note, photoObjectKey, now,
+      instanceId, childId, submissionOperationId
+    ),
+    db.prepare(
       `INSERT INTO notifications (
         id, family_id, recipient_role, recipient_child_id, type, title, message, entity_type, entity_id, created_at
-      ) VALUES (?, ?, 'parent', NULL, 'task_submitted', ?, ?, 'task_instance', ?, ?)`
-    )
-    .bind(
+      )
+      SELECT ?, ?, 'parent', NULL, 'task_submitted', ?, ?, 'task_instance', ?, ? WHERE ${operationGuard}`
+    ).bind(
       generateId(),
       instance.family_id,
       `משימה חדשה לאישור: ${instance.title}`,
       `${childName} הגיש/ה את המשימה "${instance.title}"`,
       instanceId,
-      now
-    )
-    .run();
-
-  // Audit log
-  await db
-    .prepare(
+      now,
+      instanceId,
+      childId,
+      submissionOperationId
+    ),
+    db.prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
-       VALUES (?, ?, 'child', ?, 'task_submitted', 'task_instance', ?, ?, ?)`
-    )
-    .bind(
+       SELECT ?, ?, 'child', ?, 'task_submitted', 'task_instance', ?, ?, ? WHERE ${operationGuard}`
+    ).bind(
       generateId(),
       instance.family_id,
       childId,
       instanceId,
-      JSON.stringify({ note, hasPhoto: !!photoObjectKey }),
-      now
-    )
-    .run();
+      JSON.stringify({ note, hasPhoto: !!photoObjectKey, submissionOperationId }),
+      now,
+      instanceId,
+      childId,
+      submissionOperationId
+    ),
+  ];
 
-  // If this task was generated from a repeatable template, spawn the next open instance immediately
-  if (instance.template_id) {
-    const tpl = await db
-      .prepare(
-        `SELECT schedule_type, title, description, reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json, allow_video_proof, auto_approve_enabled, max_daily_auto_awards
-         FROM task_templates 
-         WHERE id = ? AND is_active = 1 AND archived_at IS NULL`
+  if (isRepeatable && instance.template_id && template && repeatableOpenKey) {
+    // If a legacy open successor exists, adopt it first; otherwise the guarded
+    // INSERT OR IGNORE below creates exactly one successor for all races.
+    submissionStatements.push(
+      db.prepare(
+        `UPDATE task_instances
+         SET generation_key = ?
+         WHERE id = (
+           SELECT id FROM task_instances
+           WHERE template_id = ? AND child_id = ? AND status = 'open'
+             AND id <> ? AND generation_key IS NULL
+           ORDER BY created_at DESC, id DESC LIMIT 1
+         )
+         AND ${operationGuard}
+         AND NOT EXISTS (SELECT 1 FROM task_instances WHERE generation_key = ?)`
+      ).bind(
+        repeatableOpenKey,
+        instance.template_id,
+        childId,
+        instanceId,
+        instanceId,
+        childId,
+        submissionOperationId,
+        repeatableOpenKey
+      ),
+      db.prepare(
+        `INSERT OR IGNORE INTO task_instances (
+          id, family_id, template_id, child_id, title, description,
+          reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json,
+          allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date,
+          generation_key, created_at, updated_at
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?
+        WHERE ${operationGuard}`
+      ).bind(
+        generateId(),
+        instance.family_id,
+        instance.template_id,
+        childId,
+        template.title,
+        template.description,
+        template.reward_minutes,
+        template.requires_photo,
+        template.task_kind || 'bonus',
+        template.verification_mode || 'manual',
+        template.verification_rules_json || null,
+        Number(template.allow_video_proof || 0),
+        Number(template.auto_approve_enabled || 0),
+        template.max_daily_auto_awards ?? null,
+        getIsraelDateString(),
+        repeatableOpenKey,
+        now,
+        now,
+        instanceId,
+        childId,
+        submissionOperationId
       )
-      .bind(instance.template_id)
-      .first<{ schedule_type: string; title: string; description: string | null; reward_minutes: number; requires_photo: number; task_kind: 'mandatory' | 'bonus'; verification_mode: 'manual' | 'ai_media'; verification_rules_json: string | null; allow_video_proof: number; auto_approve_enabled: number; max_daily_auto_awards: number | null }>();
+    );
+  }
 
-    if (tpl && tpl.schedule_type === 'repeatable') {
-      const nextInstanceId = generateId();
-      await db
-        .prepare(
-          `INSERT INTO task_instances (
-            id, family_id, template_id, child_id, title, description, 
-            reward_minutes, requires_photo, task_kind, verification_mode, verification_rules_json,
-            allow_video_proof, auto_approve_enabled, max_daily_auto_awards, status, due_date, created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`
-        )
-        .bind(
-          nextInstanceId,
-          instance.family_id,
-          instance.template_id,
-          childId,
-          tpl.title,
-          tpl.description,
-          tpl.reward_minutes,
-          tpl.requires_photo,
-          tpl.task_kind || 'bonus',
-          tpl.verification_mode || 'manual',
-          tpl.verification_rules_json || null,
-          Number(tpl.allow_video_proof || 0),
-          Number(tpl.auto_approve_enabled || 0),
-          tpl.max_daily_auto_awards ?? null,
-          getIsraelDateString(),
-          now,
-          now
-        )
-        .run();
-    }
+  const submissionResults = await db.batch(submissionStatements);
+  if (Number((submissionResults[0] as any)?.meta?.changes || 0) === 0) {
+    return { success: false, error: 'המשימה כבר נמצאת בטיפול' };
   }
 
   return { success: true };
@@ -518,61 +584,61 @@ export async function rejectTask(
   }
 
   const now = new Date().toISOString();
+  const rejectionOperationId = generateId();
+  const operationGuard = `EXISTS (
+    SELECT 1 FROM task_instances ti
+    WHERE ti.id = ? AND ti.family_id = ? AND ti.status = 'rejected'
+      AND ti.rejection_operation_id = ?
+  )`;
 
-  const updateRes = await db
-    .prepare(
-      `UPDATE task_instances 
-       SET status = 'rejected', reviewed_at = ?, reviewed_by = 'parent', updated_at = ? 
-       WHERE id = ? AND status = 'submitted'`
-    )
-    .bind(now, now, instanceId)
-    .run();
-
-  if (updateRes.meta.changes === 0) {
-    return { success: false, error: 'המשימה אינה ממתינה לאישור' };
-  }
-
-  await db
-    .prepare(
-      `UPDATE task_submissions 
-       SET status = 'rejected', reviewed_at = ? 
-       WHERE task_instance_id = ? AND status = 'pending'`
-    )
-    .bind(now, instanceId)
-    .run();
-
-  // Notification to child
-  await db
-    .prepare(
+  const rejectionStatements: D1PreparedStatement[] = [
+    db.prepare(
+      `UPDATE task_instances
+       SET status = 'rejected', reviewed_at = ?, reviewed_by = 'parent',
+           rejection_operation_id = ?, updated_at = ?
+       WHERE id = ? AND family_id = ? AND status = 'submitted'`
+    ).bind(now, rejectionOperationId, now, instanceId, parentFamilyId),
+    db.prepare(
+      `UPDATE task_submissions
+       SET status = 'rejected', reviewed_at = ?
+       WHERE task_instance_id = ? AND status = 'pending' AND ${operationGuard}`
+    ).bind(now, instanceId, instanceId, parentFamilyId, rejectionOperationId),
+    db.prepare(
       `INSERT INTO notifications (
         id, family_id, recipient_role, recipient_child_id, type, title, message, entity_type, entity_id, created_at
-      ) VALUES (?, ?, 'child', ?, 'task_rejected', ?, ?, 'task_instance', ?, ?)`
-    )
-    .bind(
+      )
+      SELECT ?, ?, 'child', ?, 'task_rejected', ?, ?, 'task_instance', ?, ? WHERE ${operationGuard}`
+    ).bind(
       generateId(),
       parentFamilyId,
       instance.child_id,
       `המשימה לא אושרה: ${instance.title}`,
       reason || 'המשימה לא אושרה על ידי ההורים. ניתן להגיש שוב.',
       instanceId,
-      now
-    )
-    .run();
-
-  // Audit log
-  await db
-    .prepare(
+      now,
+      instanceId,
+      parentFamilyId,
+      rejectionOperationId
+    ),
+    db.prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
-       VALUES (?, ?, 'parent', 'parent', 'task_rejected', 'task_instance', ?, ?, ?)`
-    )
-    .bind(
+       SELECT ?, ?, 'parent', 'parent', 'task_rejected', 'task_instance', ?, ?, ? WHERE ${operationGuard}`
+    ).bind(
       generateId(),
       parentFamilyId,
       instanceId,
-      JSON.stringify({ reason }),
-      now
-    )
-    .run();
+      JSON.stringify({ reason, rejectionOperationId }),
+      now,
+      instanceId,
+      parentFamilyId,
+      rejectionOperationId
+    ),
+  ];
+
+  const rejectionResults = await db.batch(rejectionStatements);
+  if (Number((rejectionResults[0] as any)?.meta?.changes || 0) === 0) {
+    return { success: false, error: 'המשימה אינה ממתינה לאישור' };
+  }
 
   return { success: true };
 }
