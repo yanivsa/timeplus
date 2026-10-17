@@ -9,11 +9,12 @@ export async function requestScreenTime(
   minutes: number,
   source: ScreenTimeSource
 ): Promise<{ success: boolean; error?: string; requestId?: string }> {
-  if (!Number.isInteger(minutes) || minutes <= 0) {
+  if (!Number.isSafeInteger(minutes) || minutes <= 0) {
     return { success: false, error: 'כמות הדקות חייבת להיות מספר שלם וגדול מאפס' };
   }
 
-  // Check child's available balance: Child cannot independently overspend
+  // Check child's available balance: Child cannot independently overspend.
+  // Approval performs the same check again against the current balance.
   const child = await db
     .prepare(`SELECT available_minutes, name FROM children WHERE id = ? AND family_id = ?`)
     .bind(childId, familyId)
@@ -33,47 +34,40 @@ export async function requestScreenTime(
   const requestId = generateId();
   const now = new Date().toISOString();
 
-  await db
-    .prepare(
+  const requestStatements: D1PreparedStatement[] = [
+    db.prepare(
       `INSERT INTO screen_time_requests (
         id, family_id, child_id, requested_minutes, source, status, requested_at
       ) VALUES (?, ?, ?, ?, ?, 'pending', ?)`
-    )
-    .bind(requestId, familyId, childId, minutes, source, now)
-    .run();
-
-  // Create notification for parents
-  await db
-    .prepare(
+    ).bind(requestId, familyId, childId, minutes, source, now),
+    db.prepare(
       `INSERT INTO notifications (
         id, family_id, recipient_role, recipient_child_id, type, title, message, entity_type, entity_id, created_at
       ) VALUES (?, ?, 'parent', NULL, 'screen_requested', ?, ?, 'screen_request', ?, ?)`
-    )
-    .bind(
+    ).bind(
       generateId(),
       familyId,
       `בקשת זמן מסך: ${minutes} דקות`,
       `${child.name} מבקש/ת ${minutes} דקות ל-${source}`,
       requestId,
       now
-    )
-    .run();
-
-  // Audit log
-  await db
-    .prepare(
+    ),
+    db.prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
        VALUES (?, ?, 'child', ?, 'screen_time_requested', 'screen_time_request', ?, ?, ?)`
-    )
-    .bind(
+    ).bind(
       generateId(),
       familyId,
       childId,
       requestId,
       JSON.stringify({ minutes, source }),
       now
-    )
-    .run();
+    ),
+  ];
+
+  // D1 batches are transactional, so a request can never exist without its
+  // matching parent notification and audit record (or vice versa).
+  await db.batch(requestStatements);
 
   return { success: true, requestId };
 }
@@ -94,110 +88,147 @@ export async function reviewScreenTimeRequest(
   if (req.status !== 'pending') return { success: false, error: 'הבקשה כבר טופלה בעבר' };
 
   const now = new Date().toISOString();
+  const reviewOperationId = generateId();
 
   if (!approved) {
-    const updateRes = await db
-      .prepare(
+    const rejectionGuard = `EXISTS (
+      SELECT 1 FROM screen_time_requests r
+      WHERE r.id = ? AND r.family_id = ? AND r.status = 'rejected'
+        AND r.review_operation_id = ?
+    )`;
+    const rejectionStatements: D1PreparedStatement[] = [
+      db.prepare(
         `UPDATE screen_time_requests
-         SET status = 'rejected', reviewed_at = ?, reviewed_by = 'parent'
+         SET status = 'rejected', reviewed_at = ?, reviewed_by = 'parent', review_operation_id = ?
          WHERE id = ? AND family_id = ? AND status = 'pending'`
-      )
-      .bind(now, requestId, parentFamilyId)
-      .run();
-
-    if (updateRes.meta.changes === 0) return { success: false, error: 'הבקשה כבר טופלה' };
-
-    await db.batch([
+      ).bind(now, reviewOperationId, requestId, parentFamilyId),
       db.prepare(
         `INSERT INTO notifications (
           id, family_id, recipient_role, recipient_child_id, type, title, message, entity_type, entity_id, created_at
-        ) VALUES (?, ?, 'child', ?, 'screen_rejected', 'בקשת זמן מסך לא אושרה', 'ההורים לא אישרו את בקשת זמן המסך כעת.', 'screen_request', ?, ?)`
-      ).bind(generateId(), parentFamilyId, req.child_id, requestId, now),
+        )
+        SELECT ?, ?, 'child', ?, 'screen_rejected', 'בקשת זמן מסך לא אושרה',
+               'ההורים לא אישרו את בקשת זמן המסך כעת.', 'screen_request', ?, ?
+        WHERE ${rejectionGuard}`
+      ).bind(
+        generateId(), parentFamilyId, req.child_id, requestId, now,
+        requestId, parentFamilyId, reviewOperationId
+      ),
       db.prepare(
         `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
-         VALUES (?, ?, 'parent', 'parent', 'screen_time_rejected', 'screen_time_request', ?, '{}', ?)`
-      ).bind(generateId(), parentFamilyId, requestId, now),
-    ]);
+         SELECT ?, ?, 'parent', 'parent', 'screen_time_rejected', 'screen_time_request', ?, ?, ?
+         WHERE ${rejectionGuard}`
+      ).bind(
+        generateId(), parentFamilyId, requestId,
+        JSON.stringify({ reviewOperationId }), now,
+        requestId, parentFamilyId, reviewOperationId
+      ),
+    ];
 
+    const rejectionResults = await db.batch(rejectionStatements);
+    if (Number((rejectionResults[0] as any)?.meta?.changes || 0) === 0) {
+      return { success: false, error: 'הבקשה כבר טופלה' };
+    }
     return { success: true, deductedMinutes: 0 };
   }
 
-  const finalMinutes =
-    typeof customMinutes === 'number' && Number.isFinite(customMinutes) && customMinutes > 0
-      ? customMinutes
-      : req.requested_minutes;
-  const reviewOperationId = generateId();
+  if (customMinutes !== undefined && (!Number.isSafeInteger(customMinutes) || customMinutes <= 0)) {
+    return { success: false, error: 'מספר הדקות לאישור חייב להיות מספר שלם וגדול מאפס' };
+  }
+  const finalMinutes = customMinutes !== undefined ? customMinutes : req.requested_minutes;
+  if (!Number.isSafeInteger(finalMinutes) || finalMinutes <= 0) {
+    return { success: false, error: 'מספר הדקות בבקשה אינו תקין' };
+  }
+
   const usageLogId = generateId();
   const txId = generateId();
   const spendReason = `זמן מסך: ${req.source} (${finalMinutes} דק')`;
+  const approvalGuard = `EXISTS (
+    SELECT 1 FROM screen_time_requests r
+    WHERE r.id = ? AND r.family_id = ? AND r.status = 'approved'
+      AND r.review_operation_id = ?
+  )`;
 
   const results = await db.batch([
     db.prepare(
       `UPDATE screen_time_requests
        SET status = 'approved', approved_minutes = ?, reviewed_at = ?, reviewed_by = 'parent', review_operation_id = ?
-       WHERE id = ? AND family_id = ? AND status = 'pending'`
-    ).bind(finalMinutes, now, reviewOperationId, requestId, parentFamilyId),
+       WHERE id = ? AND family_id = ? AND status = 'pending'
+         AND EXISTS (
+           SELECT 1 FROM children c
+           WHERE c.id = screen_time_requests.child_id AND c.family_id = ?
+             AND c.available_minutes >= ?
+         )`
+    ).bind(finalMinutes, now, reviewOperationId, requestId, parentFamilyId, parentFamilyId, finalMinutes),
     db.prepare(
       `UPDATE children
        SET available_minutes = available_minutes - ?, updated_at = ?
-       WHERE id = ? AND family_id = ?
-         AND EXISTS (
-           SELECT 1 FROM screen_time_requests r
-           WHERE r.id = ? AND r.family_id = ? AND r.status = 'approved' AND r.review_operation_id = ?
-         )`
-    ).bind(finalMinutes, now, req.child_id, parentFamilyId, requestId, parentFamilyId, reviewOperationId),
+       WHERE id = ? AND family_id = ? AND available_minutes >= ?
+         AND ${approvalGuard}`
+    ).bind(
+      finalMinutes, now, req.child_id, parentFamilyId, finalMinutes,
+      requestId, parentFamilyId, reviewOperationId
+    ),
     db.prepare(
       `INSERT INTO screen_usage_logs (
         id, family_id, child_id, screen_time_request_id, source, minutes, reason, created_by, created_at
       )
       SELECT ?, ?, ?, ?, ?, ?, 'אישור בקשת מסך', 'parent', ?
-      WHERE EXISTS (
-        SELECT 1 FROM screen_time_requests r
-        WHERE r.id = ? AND r.family_id = ? AND r.status = 'approved' AND r.review_operation_id = ?
-      )`
-    ).bind(usageLogId, parentFamilyId, req.child_id, requestId, req.source, finalMinutes, now, requestId, parentFamilyId, reviewOperationId),
+      WHERE ${approvalGuard}`
+    ).bind(
+      usageLogId, parentFamilyId, req.child_id, requestId, req.source, finalMinutes, now,
+      requestId, parentFamilyId, reviewOperationId
+    ),
     db.prepare(
       `INSERT INTO minute_transactions (
         id, family_id, child_id, type, amount, balance_after, reason, screen_usage_log_id, screen_time_request_id, created_by, created_at
       )
       SELECT ?, ?, c.id, 'spend', ?, c.available_minutes, ?, ?, ?, 'parent', ?
       FROM children c
-      WHERE c.id = ? AND c.family_id = ?
-        AND EXISTS (
-          SELECT 1 FROM screen_time_requests r
-          WHERE r.id = ? AND r.family_id = ? AND r.status = 'approved' AND r.review_operation_id = ?
-        )`
-    ).bind(txId, parentFamilyId, -finalMinutes, spendReason, usageLogId, requestId, now, req.child_id, parentFamilyId, requestId, parentFamilyId, reviewOperationId),
+      WHERE c.id = ? AND c.family_id = ? AND ${approvalGuard}`
+    ).bind(
+      txId, parentFamilyId, -finalMinutes, spendReason, usageLogId, requestId, now,
+      req.child_id, parentFamilyId,
+      requestId, parentFamilyId, reviewOperationId
+    ),
     db.prepare(
       `INSERT INTO notifications (
         id, family_id, recipient_role, recipient_child_id, type, title, message, entity_type, entity_id, created_at
       )
       SELECT ?, ?, 'child', ?, 'screen_approved', ?, ?, 'screen_request', ?, ?
-      WHERE EXISTS (
-        SELECT 1 FROM screen_time_requests r
-        WHERE r.id = ? AND r.review_operation_id = ?
-      )`
+      WHERE ${approvalGuard}`
     ).bind(
       generateId(), parentFamilyId, req.child_id,
       `זמן מסך אושר! (${finalMinutes} דקות)`,
       `תהנה! נוכו ${finalMinutes} דקות עבור ${req.source}.`,
-      requestId, now, requestId, reviewOperationId
+      requestId, now,
+      requestId, parentFamilyId, reviewOperationId
     ),
     db.prepare(
       `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
        SELECT ?, ?, 'parent', 'parent', 'screen_time_approved', 'screen_time_request', ?, ?, ?
-       WHERE EXISTS (
-         SELECT 1 FROM screen_time_requests r
-         WHERE r.id = ? AND r.review_operation_id = ?
-       )`
+       WHERE ${approvalGuard}`
     ).bind(
       generateId(), parentFamilyId, requestId,
       JSON.stringify({ finalMinutes, source: req.source, reviewOperationId }),
-      now, requestId, reviewOperationId
+      now,
+      requestId, parentFamilyId, reviewOperationId
     ),
   ]);
 
   if (Number((results[0] as any)?.meta?.changes || 0) === 0) {
+    const current = await db.prepare(
+      `SELECT r.status, c.available_minutes
+       FROM screen_time_requests r
+       LEFT JOIN children c ON c.id = r.child_id AND c.family_id = r.family_id
+       WHERE r.id = ? AND r.family_id = ?`
+    ).bind(requestId, parentFamilyId).first<{ status: string; available_minutes: number | null }>();
+
+    if (current?.status === 'pending' && Number(current.available_minutes ?? -1) < finalMinutes) {
+      return {
+        success: false,
+        error: `אין מספיק דקות בארנק לאישור הבקשה (יתרה נוכחית: ${Number(current.available_minutes ?? 0)} דקות)`,
+      };
+    }
     return { success: false, error: 'הבקשה כבר טופלה' };
   }
 
@@ -212,8 +243,8 @@ export async function logManualScreenUsage(
   source: ScreenTimeSource,
   reason: string | null = null
 ): Promise<{ success: boolean; error?: string; warning?: string; newBalance?: number }> {
-  if (!Number.isFinite(minutes) || minutes <= 0) {
-    return { success: false, error: 'הדקות לניצול חייבות להיות מספר חיובי' };
+  if (!Number.isSafeInteger(minutes) || minutes <= 0) {
+    return { success: false, error: 'הדקות לניצול חייבות להיות מספר שלם וחיובי' };
   }
 
   const child = await db
@@ -271,8 +302,8 @@ export async function adjustMinutes(
   minutesDelta: number,
   reason: string
 ): Promise<{ success: boolean; error?: string; warning?: string; newBalance?: number }> {
-  if (!Number.isFinite(minutesDelta) || minutesDelta === 0) {
-    return { success: false, error: 'שינוי הדקות לא יכול להיות אפס' };
+  if (!Number.isSafeInteger(minutesDelta) || minutesDelta === 0) {
+    return { success: false, error: 'שינוי הדקות חייב להיות מספר שלם ושונה מאפס' };
   }
   if (minutesDelta < 0 && (!reason || reason.trim() === '')) {
     return { success: false, error: 'הפחתת דקות דורשת ציון סיבה' };
