@@ -4,6 +4,7 @@ import { generateRandomToken } from './crypto';
 const SESSION_COOKIE_NAME = 'timeplus_session';
 const SESSION_DURATION_DAYS = 30;
 const MAX_FAILED_ATTEMPTS = 5;
+const MAX_IP_FAILED_ATTEMPTS = 20;
 const LOCKOUT_WINDOW_MINUTES = 15;
 
 export function parseCookies(cookieHeader: string | null): Record<string, string> {
@@ -34,18 +35,29 @@ export async function checkRateLimit(
   targetId: string
 ): Promise<{ allowed: boolean; remainingMinutes?: number }> {
   const windowStart = new Date(Date.now() - LOCKOUT_WINDOW_MINUTES * 60 * 1000).toISOString();
-  const row = await db
+  const targetRow = await db
     .prepare(
       `SELECT COUNT(*) as failures FROM login_attempts 
-       WHERE (ip_address = ? OR target_id = ?) 
+       WHERE ip_address = ? AND target_id = ?
        AND success = 0 
        AND attempted_at >= ?`
     )
     .bind(ipAddress, targetId, windowStart)
     .first<{ failures: number }>();
 
-  const failures = row?.failures || 0;
-  if (failures >= MAX_FAILED_ATTEMPTS) {
+  const ipRow = await db
+    .prepare(
+      `SELECT COUNT(*) as failures FROM login_attempts
+       WHERE ip_address = ?
+       AND success = 0
+       AND attempted_at >= ?`
+    )
+    .bind(ipAddress, windowStart)
+    .first<{ failures: number }>();
+
+  const targetFailures = targetRow?.failures || 0;
+  const ipFailures = ipRow?.failures || 0;
+  if (targetFailures >= MAX_FAILED_ATTEMPTS || ipFailures >= MAX_IP_FAILED_ATTEMPTS) {
     return { allowed: false, remainingMinutes: LOCKOUT_WINDOW_MINUTES };
   }
   return { allowed: true };
@@ -58,13 +70,25 @@ export async function recordLoginAttempt(
   targetId: string,
   success: boolean
 ): Promise<void> {
-  await db
+  const insertAttempt = db
     .prepare(
       `INSERT INTO login_attempts (id, ip_address, target_role, target_id, success, attempted_at)
        VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
     )
-    .bind(crypto.randomUUID(), ipAddress, targetRole, targetId, success ? 1 : 0)
-    .run();
+    .bind(crypto.randomUUID(), ipAddress, targetRole, targetId, success ? 1 : 0);
+
+  if (!success) {
+    await insertAttempt.run();
+    return;
+  }
+
+  await db.batch([
+    insertAttempt,
+    db.prepare(
+      `DELETE FROM login_attempts
+       WHERE ip_address = ? AND target_id = ? AND success = 0`
+    ).bind(ipAddress, targetId),
+  ]);
 }
 
 export async function createSession(
