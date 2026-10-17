@@ -52,6 +52,20 @@ test('setup is recoverable: family stays uninitialized until all dependent work 
     'is_initialized=1 must be the last durable setup transition after session creation');
 });
 
+test('setup retry lease prevents a concurrent valid setup from deleting an active initialization', () => {
+  const block = between(init, 'export async function initializeFamily', 'return { success: true, sessionToken: token };');
+  assert.match(init, /SETUP_LEASE_MS\s*=\s*\d+/,
+    'setup must define a bounded lease for recovering abandoned initialization');
+  assert.match(block, /SELECT is_initialized, updated_at FROM families WHERE id = \?/,
+    'setup must inspect the existing uninitialized row before cleanup');
+  assert.match(block, /Date\.now\(\)[\s\S]*SETUP_LEASE_MS/,
+    'a recent uninitialized row must be treated as an active setup lease');
+  assert.match(block, /DELETE FROM families WHERE id = \? AND is_initialized = 0 AND updated_at = \?/,
+    'stale cleanup must use compare-and-swap on the exact row observed');
+  assert.match(block, /אתחול המשפחה כבר מתבצע/,
+    'a competing setup should fail without deleting the active attempt');
+});
+
 test('production setup fails closed when INIT_SECRET is missing unless an explicit non-production escape hatch is enabled', () => {
   assert.match(types, /ALLOW_INSECURE_INIT\?:\s*string/);
   assert.match(init, /!env\.INIT_SECRET/);
