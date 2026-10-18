@@ -48,3 +48,18 @@ test('task rejection is one guarded batch keyed by rejection_operation_id', () =
   assert.match(block, /INSERT INTO audit_log/);
   assert.match(block, /await db\.batch\(rejectionStatements\)/);
 });
+
+test('archiving a task template atomically removes child-visible open and rejected instances', () => {
+  const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+  const marker = "pathname.match(/^\\/api\\/parent\\/tasks\\/templates\\/[^/]+$/) && method === 'DELETE'";
+  const start = index.indexOf(marker);
+  assert.notEqual(start, -1, 'missing task-template DELETE route');
+  const block = index.slice(start, start + 1800);
+  assert.match(block, /await env\.DB\.batch\(/,
+    'template archive and instance cleanup must commit atomically');
+  assert.match(block, /UPDATE task_templates[\s\S]*SET archived_at = \?, is_active = 0/);
+  assert.match(block, /DELETE FROM task_instances/,
+    'archiving a template must remove already-generated child-visible instances');
+  assert.match(block, /status IN \('open', 'rejected'\)/,
+    'only unfinished open or rejected instances should be removed');
+});

@@ -1175,9 +1175,23 @@ export default {
       if (pathname.match(/^\/api\/parent\/tasks\/templates\/[^/]+$/) && method === 'DELETE') {
         const templateId = pathname.split('/')[5];
         const now = new Date().toISOString();
-        await env.DB.prepare(`UPDATE task_templates SET archived_at = ?, is_active = 0 WHERE id = ? AND family_id = ?`)
-          .bind(now, templateId, user.familyId)
-          .run();
+
+        // Archive the template and remove any unfinished instances that were
+        // already generated from it. Without this cleanup, a daily instance
+        // for today remains child-visible even after the parent removes the
+        // template, which makes the task appear to "come back".
+        await env.DB.batch([
+          env.DB.prepare(
+            `UPDATE task_templates
+             SET archived_at = ?, is_active = 0, updated_at = ?
+             WHERE id = ? AND family_id = ?`
+          ).bind(now, now, templateId, user.familyId),
+          env.DB.prepare(
+            `DELETE FROM task_instances
+             WHERE template_id = ? AND family_id = ? AND status IN ('open', 'rejected')`
+          ).bind(templateId, user.familyId),
+        ]);
+
         return json({ success: true, message: 'תבנית המשימה הועברה לארכיון' });
       }
 
