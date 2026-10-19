@@ -332,9 +332,13 @@ export default {
 
         // Best next open task
         const nextTask = await env.DB.prepare(
-          `SELECT id, title, description, reward_minutes FROM task_instances 
-           WHERE child_id = ? AND status = 'open' 
-           ORDER BY reward_minutes DESC LIMIT 1`
+          `SELECT ti.id, ti.title, ti.description, ti.reward_minutes
+           FROM task_instances ti
+           JOIN task_templates tt ON tt.id = ti.template_id
+           JOIN task_template_children ttc ON ttc.template_id = tt.id AND ttc.child_id = ti.child_id
+           WHERE ti.child_id = ? AND ti.status = 'open'
+             AND tt.is_active = 1 AND tt.archived_at IS NULL
+           ORDER BY ti.reward_minutes DESC LIMIT 1`
         )
           .bind(childId)
           .first();
@@ -360,12 +364,21 @@ export default {
         const { results: tasks } = await env.DB.prepare(
           `SELECT ti.*, ts.note as submission_note, tt.schedule_type
            FROM task_instances ti
-           LEFT JOIN task_templates tt ON tt.id = ti.template_id
+           JOIN task_templates tt ON tt.id = ti.template_id
            LEFT JOIN task_submissions ts ON ts.task_instance_id = ti.id AND ts.status = 'pending'
            WHERE ti.child_id = ? AND (
-             ti.due_date = ?
-             OR ti.status = 'submitted'
-             OR (tt.schedule_type = 'repeatable' AND ti.status IN ('open','rejected'))
+             ti.status = 'submitted'
+             OR (
+               tt.is_active = 1 AND tt.archived_at IS NULL
+               AND EXISTS (
+                 SELECT 1 FROM task_template_children ttc
+                 WHERE ttc.template_id = tt.id AND ttc.child_id = ti.child_id
+               )
+               AND (
+                 ti.due_date = ?
+                 OR (tt.schedule_type = 'repeatable' AND ti.status IN ('open','rejected'))
+               )
+             )
            )
            ORDER BY 
              CASE ti.status 
@@ -1166,6 +1179,15 @@ export default {
                SELECT ?, id FROM children WHERE id=? AND family_id=?`
             ).bind(templateId, cId, user.familyId).run();
           }
+          await env.DB.prepare(
+            `UPDATE task_instances
+             SET status = 'cancelled', updated_at = ?
+             WHERE template_id = ? AND family_id = ?
+               AND status IN ('open','rejected')
+               AND child_id NOT IN (
+                 SELECT child_id FROM task_template_children WHERE template_id = ?
+               )`
+          ).bind(now, templateId, user.familyId, templateId).run();
         }
 
         await ensureDailyTaskInstances(env.DB, user.familyId);
@@ -1175,9 +1197,19 @@ export default {
       if (pathname.match(/^\/api\/parent\/tasks\/templates\/[^/]+$/) && method === 'DELETE') {
         const templateId = pathname.split('/')[5];
         const now = new Date().toISOString();
-        await env.DB.prepare(`UPDATE task_templates SET archived_at = ?, is_active = 0 WHERE id = ? AND family_id = ?`)
-          .bind(now, templateId, user.familyId)
-          .run();
+        await env.DB.batch([
+          env.DB.prepare(
+            `UPDATE task_templates
+             SET archived_at = ?, is_active = 0, updated_at = ?
+             WHERE id = ? AND family_id = ?`
+          ).bind(now, now, templateId, user.familyId),
+          env.DB.prepare(
+            `UPDATE task_instances
+             SET status = 'cancelled', updated_at = ?
+             WHERE template_id = ? AND family_id = ?
+               AND status IN ('open','rejected')`
+          ).bind(now, templateId, user.familyId),
+        ]);
         return json({ success: true, message: 'תבנית המשימה הועברה לארכיון' });
       }
 

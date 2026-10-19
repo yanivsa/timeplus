@@ -28,7 +28,7 @@ jobs:
         run: node --test worker/tests/haprofessor-verifier.test.mjs worker/tests/haprofessor-integration.test.mjs worker/tests/ai-shadow-confidence.test.mjs worker/tests/ai-stale-recovery.test.mjs
 
       - name: Test production hardening regressions
-        run: node --test worker/tests/production-hardening.test.mjs worker/tests/task-approval-atomicity.test.mjs worker/tests/auth-setup-hardening.test.mjs worker/tests/task-consistency-hardening.test.mjs worker/tests/wallet-consistency-hardening.test.mjs
+        run: node --test worker/tests/production-hardening.test.mjs worker/tests/task-approval-atomicity.test.mjs worker/tests/auth-setup-hardening.test.mjs worker/tests/task-consistency-hardening.test.mjs worker/tests/wallet-consistency-hardening.test.mjs worker/tests/task-visibility-archive.test.mjs
 
       - name: Test approval metadata UI contract
         run: node --test web/tests/approval-metadata.test.mjs
