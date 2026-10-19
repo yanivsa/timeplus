@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+const tasksSource = readFileSync(new URL('../src/tasks.ts', import.meta.url), 'utf8');
 
 function between(text, start, end) {
   const a = text.indexOf(start);
@@ -40,4 +41,12 @@ test('removing a child assignment cancels stale open or rejected instances for t
   const block = index.slice(start, index.indexOf("method === 'DELETE'", start));
   assert.match(block, /UPDATE\s+task_instances[\s\S]*SET\s+status\s*=\s*'cancelled'/i);
   assert.match(block, /task_template_children/);
+});
+
+
+test('daily task reconciliation self-heals stale open or rejected instances', () => {
+  const block = between(tasksSource, 'export async function ensureDailyTaskInstances', 'export async function submitTask');
+  assert.match(block, /UPDATE\s+task_instances[\s\S]*SET\s+status\s*=\s*'cancelled'/i);
+  assert.match(block, /NOT\s+EXISTS[\s\S]*task_templates/i);
+  assert.match(block, /task_template_children/i);
 });

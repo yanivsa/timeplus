@@ -30,6 +30,26 @@ export async function ensureDailyTaskInstances(
   const targetDate = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
   const dayOfWeek = getIsraelDayOfWeek(targetDate);
 
+  // Reconcile stale open tasks from archived templates or removed child assignments.
+  // This also self-heals legacy ghost tasks that were created before cleanup was enforced.
+  await db.prepare(
+    `UPDATE task_instances
+     SET status = 'cancelled', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE family_id = ?
+       AND status IN ('open','rejected')
+       AND template_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1
+         FROM task_templates tt
+         JOIN task_template_children ttc
+           ON ttc.template_id = tt.id AND ttc.child_id = task_instances.child_id
+         WHERE tt.id = task_instances.template_id
+           AND tt.family_id = task_instances.family_id
+           AND tt.is_active = 1
+           AND tt.archived_at IS NULL
+       )`
+  ).bind(familyId).run();
+
   // Fetch active templates for family
   const { results: templates } = await db
     .prepare(
