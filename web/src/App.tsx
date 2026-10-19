@@ -5,10 +5,10 @@ import { OfflineBanner } from './components/OfflineBanner';
 import { VersionFooter } from './components/VersionFooter';
 import { ParentActiveTimers } from './components/ParentActiveTimers';
 import { ChildEvidencePanel } from './components/ChildEvidencePanel';
+import { ChildDashboardGuard } from './components/ChildDashboardGuard';
 import { EvidenceJournalPanel } from './components/EvidenceJournalPanel';
 import { LoginScreen } from './screens/LoginScreen';
 import { SetupScreen } from './screens/SetupScreen';
-import { ChildDashboard } from './screens/ChildDashboard';
 import { ParentDashboard } from './screens/ParentDashboard';
 import { registerNativeFcmToken } from './services/nativePush';
 
@@ -75,7 +75,7 @@ export const App: React.FC = () => {
         ) : (
           <>
             <ChildEvidencePanel />
-            <ChildDashboard />
+            <ChildDashboardGuard />
           </>
         )}
       </main>

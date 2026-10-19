@@ -4,6 +4,9 @@ import fs from 'node:fs';
 
 const child = fs.readFileSync('web/src/screens/ChildDashboard.tsx', 'utf8');
 const parent = fs.readFileSync('web/src/screens/ParentDashboard.tsx', 'utf8');
+const guard = fs.readFileSync('web/src/components/ChildDashboardGuard.tsx', 'utf8');
+const api = fs.readFileSync('web/src/services/api.ts', 'utf8');
+const app = fs.readFileSync('web/src/App.tsx', 'utf8');
 
 test('child refreshes within 10 seconds and parent keeps its 15-second cadence', () => {
   assert.match(child, /setInterval\(\(\) => \{[\s\S]*?loadDashboard\(\);[\s\S]*?\}, 10000\);/);
@@ -14,4 +17,23 @@ test('child dashboard refreshes immediately when foregrounded', () => {
   assert.match(child, /document\.addEventListener\('visibilitychange', syncWhenForegrounded\)/);
   assert.match(child, /window\.addEventListener\('focus', syncWhenForegrounded\)/);
   assert.match(child, /window\.addEventListener\('pageshow', syncWhenForegrounded\)/);
+});
+
+test('child dashboard is not mounted until a real wallet snapshot is verified', () => {
+  assert.match(app, /ChildDashboardGuard/);
+  assert.doesNotMatch(app, /<ChildDashboard\s*\/>/);
+  assert.match(guard, /api\/child\/dashboard\?childId=/);
+  assert.match(guard, /availableMinutes/);
+  assert.match(guard, /Number\.isFinite/);
+  assert.match(guard, /לא ניתן לטעון את יתרת הזמן/);
+  assert.match(guard, /if \(ready\) return <ChildDashboard \/>/);
+});
+
+test('dashboard snapshot requests retry and cache only the matching child', () => {
+  assert.match(api, /const attempts = dashboardSpec \? 3 : 1/);
+  assert.match(api, /for \(let attempt = 1; attempt <= attempts; attempt\+\+\)/);
+  assert.match(api, /value\?\.child\?\.id === childId/);
+  assert.match(api, /CHILD_DASHBOARD_CACHE_PREFIX/);
+  assert.match(api, /readDashboardCache\(dashboardSpec\)/);
+  assert.match(api, /writeDashboardCache\(dashboardSpec, parsed\)/);
 });
