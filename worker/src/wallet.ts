@@ -507,8 +507,17 @@ export async function getChildWalletSummary(
   const summarize = async (startUtc: string, endUtc: string) => db
     .prepare(
       `SELECT
-        COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
-        COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as spent,
+        COALESCE(SUM(CASE WHEN amount > 0 AND type IN ('earn', 'adjustment') THEN amount ELSE 0 END), 0) as earned,
+        COALESCE(SUM(CASE
+          WHEN type = 'spend' AND amount < 0
+            AND (
+              screen_usage_log_id IS NULL
+              OR NOT EXISTS (
+                SELECT 1 FROM screen_usage_corrections correction
+                WHERE correction.usage_log_id = minute_transactions.screen_usage_log_id
+              )
+            )
+          THEN ABS(amount) ELSE 0 END), 0) as spent,
         COALESCE(SUM(CASE WHEN amount > 0 AND created_by = 'academy_sync' THEN amount ELSE 0 END), 0) as academyEarned,
         COALESCE(SUM(CASE WHEN amount > 0 AND created_by = 'academy_sync' THEN 1 ELSE 0 END), 0) as academyQuestions,
         COALESCE(SUM(CASE WHEN amount > 0 AND created_by <> 'academy_sync' AND type IN ('earn', 'adjustment') THEN amount ELSE 0 END), 0) as taskEarned

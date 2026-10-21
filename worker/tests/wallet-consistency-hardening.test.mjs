@@ -80,7 +80,11 @@ test('wallet summary exposes Academy credits and non-Academy earnings separately
   assert.match(block, /taskEarnedToday/);
   assert.match(block, /created_by\s*=\s*'academy_sync'/);
   assert.match(block, /type IN \('earn', 'adjustment'\)/,
-    'task/bonus earnings must exclude refund credits');
+    'earned totals and task/bonus earnings must exclude refund credits');
+  assert.match(block, /type = 'spend'/,
+    'usage totals must count only actual spend transactions, not negative adjustments');
+  assert.match(block, /screen_usage_corrections/,
+    'corrected usage must no longer appear in spent totals');
 });
 
 
