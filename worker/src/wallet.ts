@@ -264,6 +264,37 @@ export async function logManualScreenUsage(
     return { success: false, error: 'מזהה בקשה אינו תקין' };
   }
 
+  if (requestKey) {
+    const existingUsageId = `manual-usage:${familyId}:${requestKey}`;
+    const existingUsage = await db.prepare(
+      `SELECT child_id, source, minutes, COALESCE(reason, '') AS reason
+       FROM screen_usage_logs WHERE id = ? AND family_id = ?`
+    ).bind(existingUsageId, familyId).first<{ child_id: string; source: string; minutes: number; reason: string }>();
+
+    if (existingUsage) {
+      const normalizedReason = reason || '';
+      const sameRequest =
+        existingUsage.child_id === childId &&
+        Number(existingUsage.minutes) === minutes &&
+        existingUsage.source === source &&
+        existingUsage.reason === normalizedReason;
+
+      if (!sameRequest) {
+        return { success: false, error: 'מזהה הבקשה כבר שימש לרישום ניצול אחר' };
+      }
+
+      const existingBalance = await db
+        .prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
+        .bind(childId, familyId)
+        .first<{ available_minutes: number }>();
+      const newBalance = Number(existingBalance?.available_minutes || 0);
+      const warning = newBalance < threshold
+        ? `שים לב: היתרה החדשה (${newBalance} דקות) חורגת מסף האזהרה המשפחתי (${threshold} דקות)`
+        : undefined;
+      return { success: true, warning, newBalance };
+    }
+  }
+
   const now = new Date().toISOString();
   const usageLogId = requestKey ? `manual-usage:${familyId}:${requestKey}` : generateId();
   const txId = requestKey ? `manual-usage-tx:${familyId}:${requestKey}` : generateId();
@@ -296,6 +327,27 @@ export async function logManualScreenUsage(
        VALUES (?, ?, 'parent', 'parent', 'manual_screen_usage_logged', 'screen_usage_log', ?, ?, ?)`
     ).bind(auditId, familyId, usageLogId, JSON.stringify({ minutes, source, reason, clientRequestId: requestKey || null }), now),
   ]);
+
+  // Re-read after the atomic batch as well. This closes the concurrency edge
+  // case where two different payloads with the same request id arrive before
+  // either request can observe the other's durable usage row.
+  if (requestKey) {
+    const persistedUsage = await db.prepare(
+      `SELECT child_id, source, minutes, COALESCE(reason, '') AS reason
+       FROM screen_usage_logs WHERE id = ? AND family_id = ?`
+    ).bind(usageLogId, familyId).first<{ child_id: string; source: string; minutes: number; reason: string }>();
+    const normalizedReason = reason || '';
+    const samePersistedRequest = Boolean(
+      persistedUsage &&
+      persistedUsage.child_id === childId &&
+      Number(persistedUsage.minutes) === minutes &&
+      persistedUsage.source === source &&
+      persistedUsage.reason === normalizedReason
+    );
+    if (!samePersistedRequest) {
+      return { success: false, error: 'מזהה הבקשה כבר שימש לרישום ניצול אחר' };
+    }
+  }
 
   const updated = await db.prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
     .bind(childId, familyId).first<{ available_minutes: number }>();
@@ -476,11 +528,20 @@ export async function getChildWalletSummary(
   const summarize = async (startUtc: string, endUtc: string) => db
     .prepare(
       `SELECT
-        COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
-        COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as spent,
+        COALESCE(SUM(CASE WHEN amount > 0 AND type IN ('earn', 'adjustment') THEN amount ELSE 0 END), 0) as earned,
+        COALESCE(SUM(CASE
+          WHEN type = 'spend' AND amount < 0
+            AND (
+              screen_usage_log_id IS NULL
+              OR NOT EXISTS (
+                SELECT 1 FROM screen_usage_corrections correction
+                WHERE correction.usage_log_id = minute_transactions.screen_usage_log_id
+              )
+            )
+          THEN ABS(amount) ELSE 0 END), 0) as spent,
         COALESCE(SUM(CASE WHEN amount > 0 AND created_by = 'academy_sync' THEN amount ELSE 0 END), 0) as academyEarned,
         COALESCE(SUM(CASE WHEN amount > 0 AND created_by = 'academy_sync' THEN 1 ELSE 0 END), 0) as academyQuestions,
-        COALESCE(SUM(CASE WHEN amount > 0 AND created_by <> 'academy_sync' THEN amount ELSE 0 END), 0) as taskEarned
+        COALESCE(SUM(CASE WHEN amount > 0 AND created_by <> 'academy_sync' AND type IN ('earn', 'adjustment') THEN amount ELSE 0 END), 0) as taskEarned
        FROM minute_transactions
        WHERE child_id = ? AND created_at >= ? AND created_at < ?`
     )

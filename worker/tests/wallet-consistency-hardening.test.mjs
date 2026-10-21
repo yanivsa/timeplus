@@ -79,6 +79,26 @@ test('wallet summary exposes Academy credits and non-Academy earnings separately
   assert.match(block, /academyQuestionsToday/);
   assert.match(block, /taskEarnedToday/);
   assert.match(block, /created_by\s*=\s*'academy_sync'/);
+  assert.match(block, /type IN \('earn', 'adjustment'\)/,
+    'earned totals and task/bonus earnings must exclude refund credits');
+  assert.match(block, /type = 'spend'/,
+    'usage totals must count only actual spend transactions, not negative adjustments');
+  assert.match(block, /screen_usage_corrections/,
+    'corrected usage must no longer appear in spent totals');
+});
+
+
+test('manual usage retries reject request-id reuse with a different payload', () => {
+  const block = between(wallet, 'export async function logManualScreenUsage', 'export async function adjustMinutes');
+  assert.match(block, /existingUsageId/);
+  assert.match(block, /sameRequest/);
+  assert.match(block, /מזהה הבקשה כבר שימש לרישום ניצול אחר/);
+  assert.match(block, /return \{ success: true, warning, newBalance \}/,
+    'an exact retry should return the existing balance without deducting again');
+  const afterBatch = block.slice(block.indexOf('await db.batch(['));
+  assert.match(afterBatch, /persistedUsage/,
+    'the durable row must be revalidated after the batch to cover simultaneous conflicting retries');
+  assert.match(afterBatch, /samePersistedRequest/);
 });
 
 

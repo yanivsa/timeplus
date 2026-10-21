@@ -56,8 +56,10 @@ if [[ -f runtime-window.xml ]] && grep -Eq 'ERR_NAME_NOT_RESOLVED|Webpage not av
   exit 1
 fi
 
-if grep -Eq 'FATAL EXCEPTION|AndroidRuntime: FATAL|Process: com.yanivsa.timeplus.*FATAL' runtime-logcat.txt; then
-  echo 'Fatal Android runtime error detected'
+# Ignore crashes from test infrastructure such as UiAutomation. Only a fatal
+# exception emitted by the Time+ app process should fail this app-runtime gate.
+if awk -v pid="$APP_PID" '$3 == pid && $6 == "AndroidRuntime:" && $0 ~ /FATAL EXCEPTION/ { found=1 } END { exit found ? 0 : 1 }' runtime-logcat.txt; then
+  echo 'Fatal Android runtime error detected in the Time+ app process'
   exit 1
 fi
 
