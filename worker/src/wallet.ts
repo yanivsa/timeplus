@@ -241,7 +241,8 @@ export async function logManualScreenUsage(
   childId: string,
   minutes: number,
   source: ScreenTimeSource,
-  reason: string | null = null
+  reason: string | null = null,
+  clientRequestId: string | null = null
 ): Promise<{ success: boolean; error?: string; warning?: string; newBalance?: number }> {
   if (!Number.isSafeInteger(minutes) || minutes <= 0) {
     return { success: false, error: 'הדקות לניצול חייבות להיות מספר שלם וחיובי' };
@@ -258,31 +259,42 @@ export async function logManualScreenUsage(
     .bind(familyId)
     .first<{ warning_debt_threshold: number }>();
   const threshold = settings?.warning_debt_threshold ?? -60;
+  const requestKey = typeof clientRequestId === 'string' ? clientRequestId.trim() : '';
+  if (requestKey && !/^[A-Za-z0-9._:-]{8,160}$/.test(requestKey)) {
+    return { success: false, error: 'מזהה בקשה אינו תקין' };
+  }
+
   const now = new Date().toISOString();
-  const usageLogId = generateId();
-  const txId = generateId();
+  const usageLogId = requestKey ? `manual-usage:${familyId}:${requestKey}` : generateId();
+  const txId = requestKey ? `manual-usage-tx:${familyId}:${requestKey}` : generateId();
+  const auditId = requestKey ? `manual-usage-audit:${familyId}:${requestKey}` : generateId();
   const ledgerReason = reason ? `ניצול מסך ידני: ${source} - ${reason}` : `ניצול מסך ידני: ${source}`;
 
   await db.batch([
     db.prepare(
-      `UPDATE children SET available_minutes = available_minutes - ?, updated_at = ? WHERE id = ? AND family_id = ?`
-    ).bind(minutes, now, childId, familyId),
-    db.prepare(
-      `INSERT INTO screen_usage_logs (
+      `INSERT OR IGNORE INTO screen_usage_logs (
         id, family_id, child_id, screen_time_request_id, source, minutes, reason, created_by, created_at
       ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'parent', ?)`
     ).bind(usageLogId, familyId, childId, source, minutes, reason, now),
     db.prepare(
-      `INSERT INTO minute_transactions (
+      `UPDATE children
+       SET available_minutes = available_minutes - ?, updated_at = ?
+       WHERE id = ? AND family_id = ?
+         AND NOT EXISTS (SELECT 1 FROM minute_transactions WHERE id = ?)`
+    ).bind(minutes, now, childId, familyId, txId),
+    db.prepare(
+      `INSERT OR IGNORE INTO minute_transactions (
         id, family_id, child_id, type, amount, balance_after, reason, screen_usage_log_id, created_by, created_at
       )
       SELECT ?, ?, c.id, 'spend', ?, c.available_minutes, ?, ?, 'parent', ?
-      FROM children c WHERE c.id = ? AND c.family_id = ?`
-    ).bind(txId, familyId, -minutes, ledgerReason, usageLogId, now, childId, familyId),
+      FROM children c
+      WHERE c.id = ? AND c.family_id = ?
+        AND EXISTS (SELECT 1 FROM screen_usage_logs sul WHERE sul.id = ?)`
+    ).bind(txId, familyId, -minutes, ledgerReason, usageLogId, now, childId, familyId, usageLogId),
     db.prepare(
-      `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
+      `INSERT OR IGNORE INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
        VALUES (?, ?, 'parent', 'parent', 'manual_screen_usage_logged', 'screen_usage_log', ?, ?, ?)`
-    ).bind(generateId(), familyId, usageLogId, JSON.stringify({ minutes, source, reason }), now),
+    ).bind(auditId, familyId, usageLogId, JSON.stringify({ minutes, source, reason, clientRequestId: requestKey || null }), now),
   ]);
 
   const updated = await db.prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
@@ -438,6 +450,9 @@ export async function getChildWalletSummary(
 ): Promise<{
   availableMinutes: number;
   earnedToday: number;
+  academyEarnedToday: number;
+  academyQuestionsToday: number;
+  taskEarnedToday: number;
   spentToday: number;
   earnedThisWeek: number;
   spentThisWeek: number;
@@ -462,12 +477,15 @@ export async function getChildWalletSummary(
     .prepare(
       `SELECT
         COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as earned,
-        COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as spent
+        COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as spent,
+        COALESCE(SUM(CASE WHEN amount > 0 AND created_by = 'academy_sync' THEN amount ELSE 0 END), 0) as academyEarned,
+        COALESCE(SUM(CASE WHEN amount > 0 AND created_by = 'academy_sync' THEN 1 ELSE 0 END), 0) as academyQuestions,
+        COALESCE(SUM(CASE WHEN amount > 0 AND created_by <> 'academy_sync' THEN amount ELSE 0 END), 0) as taskEarned
        FROM minute_transactions
        WHERE child_id = ? AND created_at >= ? AND created_at < ?`
     )
     .bind(childId, startUtc, endUtc)
-    .first<{ earned: number; spent: number }>();
+    .first<{ earned: number; spent: number; academyEarned: number; academyQuestions: number; taskEarned: number }>();
 
   const [todayRow, weekRow, monthRow] = await Promise.all([
     summarize(todayRange.startUtc, todayRange.endUtc),
@@ -478,6 +496,9 @@ export async function getChildWalletSummary(
   return {
     availableMinutes,
     earnedToday: todayRow?.earned || 0,
+    academyEarnedToday: todayRow?.academyEarned || 0,
+    academyQuestionsToday: todayRow?.academyQuestions || 0,
+    taskEarnedToday: todayRow?.taskEarned || 0,
     spentToday: todayRow?.spent || 0,
     earnedThisWeek: weekRow?.earned || 0,
     spentThisWeek: weekRow?.spent || 0,

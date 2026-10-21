@@ -129,6 +129,9 @@ export const ParentDashboard: React.FC = () => {
   const [usageMinutes, setUsageMinutes] = useState<number>(30);
   const [usageSource, setUsageSource] = useState('playstation');
   const [usageReason, setUsageReason] = useState('');
+  const [loggingUsage, setLoggingUsage] = useState(false);
+  const loggingUsageRef = useRef(false);
+  const usageRequestIdRef = useRef<string | null>(null);
 
   const [customApprovalTask, setCustomApprovalTask] = useState<PendingApprovalItem | null>(null);
   const [customApprovalMinutes, setCustomApprovalMinutes] = useState<number>(15);
@@ -387,8 +390,16 @@ export const ParentDashboard: React.FC = () => {
   // Manual Usage logging
   const handleLogUsage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!usageModalChild) return;
+    if (!usageModalChild || loggingUsageRef.current) return;
+
+    loggingUsageRef.current = true;
+    setLoggingUsage(true);
     audio.playTap();
+    const clientRequestId =
+      usageRequestIdRef.current ||
+      globalThis.crypto?.randomUUID?.() ||
+      `usage-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    usageRequestIdRef.current = clientRequestId;
 
     try {
       const res = await apiRequest('/api/parent/usage/log', {
@@ -398,11 +409,13 @@ export const ParentDashboard: React.FC = () => {
           minutes: usageMinutes,
           source: usageSource,
           reason: usageReason.trim() || null,
+          clientRequestId,
         }),
       });
       audio.playApproval();
       setUsageModalChild(null);
       setUsageReason('');
+      usageRequestIdRef.current = null;
       setStatusMessage({
         text: res.warning ? `${res.message} (${res.warning})` : res.message,
         type: res.warning ? 'warning' : 'success',
@@ -411,6 +424,9 @@ export const ParentDashboard: React.FC = () => {
     } catch (err: any) {
       audio.playReject();
       setStatusMessage({ text: err.message || 'רישום ניצול נכשל', type: 'error' });
+    } finally {
+      loggingUsageRef.current = false;
+      setLoggingUsage(false);
     }
   };
 
@@ -1006,6 +1022,7 @@ export const ParentDashboard: React.FC = () => {
                       setUsageModalChild(child);
                       setUsageMinutes(30);
                       setUsageReason('');
+                      usageRequestIdRef.current = null;
                     }}
                     className="flex-1 py-2 px-3 rounded-xl bg-night-950 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
                   >
@@ -1638,7 +1655,13 @@ export const ParentDashboard: React.FC = () => {
               <h3 className="font-bold text-base text-gold-300 font-cinzel">
                 רישום ניצול מסך · {usageModalChild.name}
               </h3>
-              <button onClick={() => setUsageModalChild(null)}>
+              <button
+                onClick={() => {
+                  setUsageModalChild(null);
+                  usageRequestIdRef.current = null;
+                }}
+                disabled={loggingUsage}
+              >
                 <X className="h-5 w-5 text-purple-400 hover:text-white" />
               </button>
             </div>
@@ -1687,11 +1710,12 @@ export const ParentDashboard: React.FC = () => {
                 />
               </div>
 
-              <button
+                            <button
                 type="submit"
-                className="w-full py-3 rounded-2xl font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 transition text-sm shadow-md"
+                disabled={loggingUsage}
+                className="w-full py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 hover:from-gold-300 transition text-sm shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                רשום ניצול ועדכן ארנק
+                {loggingUsage ? 'רושם…' : 'אישור ורישום ניצול'}
               </button>
             </form>
           </div>
@@ -2422,6 +2446,7 @@ export const ParentDashboard: React.FC = () => {
                   setUsageModalChild(selectedChildDetails.child);
                   setUsageMinutes(30);
                   setUsageReason('');
+                  usageRequestIdRef.current = null;
                 }}
                 className="flex-1 py-2.5 px-3 rounded-xl bg-night-900 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
               >
