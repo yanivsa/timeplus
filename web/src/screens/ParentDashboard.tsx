@@ -1655,7 +1655,13 @@ export const ParentDashboard: React.FC = () => {
               <h3 className="font-bold text-base text-gold-300 font-cinzel">
                 רישום ניצול מסך · {usageModalChild.name}
               </h3>
-              <button onClick={() => setUsageModalChild(null)}>
+              <button
+                onClick={() => {
+                  setUsageModalChild(null);
+                  usageRequestIdRef.current = null;
+                }}
+                disabled={loggingUsage}
+              >
                 <X className="h-5 w-5 text-purple-400 hover:text-white" />
               </button>
             </div>
@@ -2440,6 +2446,7 @@ export const ParentDashboard: React.FC = () => {
                   setUsageModalChild(selectedChildDetails.child);
                   setUsageMinutes(30);
                   setUsageReason('');
+                  usageRequestIdRef.current = null;
                 }}
                 className="flex-1 py-2.5 px-3 rounded-xl bg-night-900 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
               >
