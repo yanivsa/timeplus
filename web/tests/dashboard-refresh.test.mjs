@@ -53,7 +53,17 @@ test('parent manual usage blocks repeat taps and sends an idempotency key', () =
   assert.match(parent, /loggingUsage/);
   assert.match(parent, /loggingUsageRef/);
   assert.match(parent, /usageRequestIdRef/);
-  assert.match(parent, /clientRequestId:/);
-  assert.match(parent, /if \(loggingUsageRef\.current\) return/);
+  assert.match(parent, /clientRequestId[,}:]/);
+  assert.match(parent, /loggingUsageRef\.current\) return/);
   assert.match(parent, /disabled=\{loggingUsage\}/);
+});
+
+
+test('child write actions use synchronous refs to absorb rapid repeat taps', () => {
+  assert.match(child, /submittingTaskRef/);
+  assert.match(child, /submittingRequestRef/);
+  assert.match(child, /screenSessionBusyRef/);
+  assert.match(child, /if \(!selectedTask \|\| submittingTaskRef\.current\) return/);
+  assert.match(child, /if \(submittingRequestRef\.current\) return/);
+  assert.match(child, /if \(screenSessionBusyRef\.current\) return/);
 });

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const wallet = readFileSync(new URL('../src/wallet.ts', import.meta.url), 'utf8');
 const tasks = readFileSync(new URL('../src/tasks.ts', import.meta.url), 'utf8');
+const index = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
 
 function between(text, start, end) {
   const a = text.indexOf(start);
@@ -78,4 +79,11 @@ test('wallet summary exposes Academy credits and non-Academy earnings separately
   assert.match(block, /academyQuestionsToday/);
   assert.match(block, /taskEarnedToday/);
   assert.match(block, /created_by\s*=\s*'academy_sync'/);
+});
+
+
+test('parent usage route forwards the stable client request id to the wallet', () => {
+  const route = index.slice(index.indexOf("pathname === '/api/parent/usage/log'"), index.indexOf("pathname.match(/^\/api\/parent\/usage", index.indexOf("pathname === '/api/parent/usage/log'")));
+  assert.match(route, /clientRequestId/);
+  assert.match(route, /logManualScreenUsage\([^)]*clientRequestId/);
 });

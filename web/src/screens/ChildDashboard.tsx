@@ -39,18 +39,21 @@ export const ChildDashboard: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<TaskItem | null>(null);
   const [submissionNote, setSubmissionNote] = useState('');
   const [submittingTask, setSubmittingTask] = useState(false);
+  const submittingTaskRef = useRef(false);
 
   const [showScreenRequestModal, setShowScreenRequestModal] = useState(false);
   const [requestMinutes, setRequestMinutes] = useState(30);
   const [customRequestMinutes, setCustomRequestMinutes] = useState(false);
   const [requestSource, setRequestSource] = useState('playstation');
   const [submittingRequest, setSubmittingRequest] = useState(false);
+  const submittingRequestRef = useRef(false);
   const [showSelfUsageModal, setShowSelfUsageModal] = useState(false);
   const [selfUsageSource, setSelfUsageSource] = useState('vr');
   const [screenSession, setScreenSession] = useState<any>({ activeSession: null, readyRequests: [] });
   const [screenSessionLoadedAt, setScreenSessionLoadedAt] = useState(() => performance.now());
   const [timerTick, setTimerTick] = useState(() => performance.now());
   const [screenSessionBusy, setScreenSessionBusy] = useState(false);
+  const screenSessionBusyRef = useRef(false);
   const [showTimeUpAlert, setShowTimeUpAlert] = useState(false);
   const alertedSessionRef = useRef<string | null>(null);
 
@@ -122,7 +125,8 @@ export const ChildDashboard: React.FC = () => {
 
   const handleSubmitTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTask) return;
+    if (!selectedTask || submittingTaskRef.current) return;
+    submittingTaskRef.current = true;
     audio.playTap();
     setSubmittingTask(true);
     setStatusMessage(null);
@@ -144,6 +148,7 @@ export const ChildDashboard: React.FC = () => {
       audio.playReject();
       setStatusMessage(err.message || 'שגיאה בשליחת המשימה');
     } finally {
+      submittingTaskRef.current = false;
       setSubmittingTask(false);
     }
   };
@@ -155,6 +160,8 @@ export const ChildDashboard: React.FC = () => {
       return;
     }
 
+    if (submittingRequestRef.current) return;
+    submittingRequestRef.current = true;
     audio.playTap();
     setSubmittingRequest(true);
     setStatusMessage(null);
@@ -176,12 +183,14 @@ export const ChildDashboard: React.FC = () => {
       audio.playReject();
       setStatusMessage(err.message || 'שגיאה בשליחת הבקשה');
     } finally {
+      submittingRequestRef.current = false;
       setSubmittingRequest(false);
     }
   };
 
   const handleStartSelfUsage = async () => {
-    if (screenSessionBusy) return;
+    if (screenSessionBusyRef.current) return;
+    screenSessionBusyRef.current = true;
     setScreenSessionBusy(true);
     setStatusMessage(null);
 
@@ -199,12 +208,13 @@ export const ChildDashboard: React.FC = () => {
       audio.playReject();
       setStatusMessage(err.message || 'לא ניתן להתחיל את הטיימר');
     } finally {
+      screenSessionBusyRef.current = false;
       setScreenSessionBusy(false);
     }
   };
 
   const handleScreenSessionAction = async (action: 'start' | 'pause' | 'resume' | 'stop', requestId?: string) => {
-    if (screenSessionBusy) return;
+    if (screenSessionBusyRef.current) return;
 
     if (action === 'stop') {
       const isSelfUsage = activeSession?.mode === 'self';
@@ -214,6 +224,7 @@ export const ChildDashboard: React.FC = () => {
       if (!confirm(message)) return;
     }
 
+    screenSessionBusyRef.current = true;
     setScreenSessionBusy(true);
     try {
       const res = await apiRequest(`/api/child/screen-session/${action}`, {
@@ -236,6 +247,7 @@ export const ChildDashboard: React.FC = () => {
       audio.playReject();
       setStatusMessage(err.message || 'פעולת הטיימר נכשלה');
     } finally {
+      screenSessionBusyRef.current = false;
       setScreenSessionBusy(false);
     }
   };
@@ -386,16 +398,27 @@ export const ChildDashboard: React.FC = () => {
         </div>
 
         {/* Today Breakdown */}
-        <div className="mt-4 pt-4 border-t border-purple-500/20 grid grid-cols-2 gap-3 text-xs">
-          <div className="flex items-center justify-center gap-1.5 text-emerald-400 font-semibold bg-emerald-950/30 py-2 rounded-xl border border-emerald-500/20">
+        <div className="mt-4 pt-4 border-t border-purple-500/20 grid grid-cols-3 gap-2 text-[11px]">
+          <div className="flex flex-col items-center justify-center gap-0.5 text-cyan-300 font-semibold bg-cyan-950/30 py-2 rounded-xl border border-cyan-500/20 text-center">
             <TrendingUp className="h-4 w-4" />
-            <span>+{wallet?.earnedToday ?? 0} הרווחת היום</span>
+            <span>+{wallet?.academyEarnedToday ?? 0} דק׳</span>
+            <span className="text-[10px] text-cyan-200/80">אקדמיה היום</span>
+            <span className="text-[9px] text-cyan-200/60">{wallet?.academyQuestionsToday ?? 0} שאלות נכונות</span>
           </div>
-          <div className="flex items-center justify-center gap-1.5 text-purple-300/80 font-semibold bg-night-950/50 py-2 rounded-xl border border-purple-500/20">
+          <div className="flex flex-col items-center justify-center gap-0.5 text-emerald-400 font-semibold bg-emerald-950/30 py-2 rounded-xl border border-emerald-500/20 text-center">
+            <TrendingUp className="h-4 w-4" />
+            <span>+{wallet?.taskEarnedToday ?? 0} דק׳</span>
+            <span className="text-[10px] text-emerald-300/80">משימות / בונוסים</span>
+          </div>
+          <div className="flex flex-col items-center justify-center gap-0.5 text-purple-300/80 font-semibold bg-night-950/50 py-2 rounded-xl border border-purple-500/20 text-center">
             <TrendingDown className="h-4 w-4 text-purple-400" />
-            <span>-{wallet?.spentToday ?? 0} ניצלת היום</span>
+            <span>-{wallet?.spentToday ?? 0} דק׳</span>
+            <span className="text-[10px]">ניצלת היום</span>
           </div>
         </div>
+        <p className="mt-2 text-[10px] text-purple-300/60 text-center">
+          היתרה כוללת אקדמיה + משימות / בונוסים − זמן שנוצל
+        </p>
 
         {/* XP Progress Bar */}
         <div className="mt-5 space-y-1.5 text-right">

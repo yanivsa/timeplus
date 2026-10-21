@@ -918,12 +918,13 @@ export default {
         const minutes = Number(body.minutes);
         const source = body.source || 'other';
         const reason = body.reason || null;
+        const clientRequestId = typeof body.clientRequestId === 'string' ? body.clientRequestId.trim() : null;
 
         if (!childId || !minutes || minutes <= 0) {
           return errorJson('נתונים חסרים לרישום ניצול', 400);
         }
 
-        const result = await logManualScreenUsage(env.DB, user.familyId, childId, minutes, source, reason);
+        const result = await logManualScreenUsage(env.DB, user.familyId, childId, minutes, source, reason, clientRequestId);
         if (!result.success) {
           return errorJson(result.error || 'רישום ניצול נכשל', 400);
         }

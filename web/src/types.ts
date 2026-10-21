@@ -25,6 +25,9 @@ export interface ChildSummary {
   wallet: {
     availableMinutes: number;
     earnedToday: number;
+    academyEarnedToday: number;
+    academyQuestionsToday: number;
+    taskEarnedToday: number;
     spentToday: number;
     earnedThisWeek: number;
     spentThisWeek: number;
