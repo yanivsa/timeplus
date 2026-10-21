@@ -328,6 +328,27 @@ export async function logManualScreenUsage(
     ).bind(auditId, familyId, usageLogId, JSON.stringify({ minutes, source, reason, clientRequestId: requestKey || null }), now),
   ]);
 
+  // Re-read after the atomic batch as well. This closes the concurrency edge
+  // case where two different payloads with the same request id arrive before
+  // either request can observe the other's durable usage row.
+  if (requestKey) {
+    const persistedUsage = await db.prepare(
+      `SELECT child_id, source, minutes, COALESCE(reason, '') AS reason
+       FROM screen_usage_logs WHERE id = ? AND family_id = ?`
+    ).bind(usageLogId, familyId).first<{ child_id: string; source: string; minutes: number; reason: string }>();
+    const normalizedReason = reason || '';
+    const samePersistedRequest = Boolean(
+      persistedUsage &&
+      persistedUsage.child_id === childId &&
+      Number(persistedUsage.minutes) === minutes &&
+      persistedUsage.source === source &&
+      persistedUsage.reason === normalizedReason
+    );
+    if (!samePersistedRequest) {
+      return { success: false, error: 'מזהה הבקשה כבר שימש לרישום ניצול אחר' };
+    }
+  }
+
   const updated = await db.prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
     .bind(childId, familyId).first<{ available_minutes: number }>();
   const newBalance = Number(updated?.available_minutes || 0);

@@ -95,6 +95,10 @@ test('manual usage retries reject request-id reuse with a different payload', ()
   assert.match(block, /מזהה הבקשה כבר שימש לרישום ניצול אחר/);
   assert.match(block, /return \{ success: true, warning, newBalance \}/,
     'an exact retry should return the existing balance without deducting again');
+  const afterBatch = block.slice(block.indexOf('await db.batch(['));
+  assert.match(afterBatch, /persistedUsage/,
+    'the durable row must be revalidated after the batch to cover simultaneous conflicting retries');
+  assert.match(afterBatch, /samePersistedRequest/);
 });
 
 
