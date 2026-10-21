@@ -264,6 +264,37 @@ export async function logManualScreenUsage(
     return { success: false, error: 'מזהה בקשה אינו תקין' };
   }
 
+  if (requestKey) {
+    const existingUsageId = `manual-usage:${familyId}:${requestKey}`;
+    const existingUsage = await db.prepare(
+      `SELECT child_id, source, minutes, COALESCE(reason, '') AS reason
+       FROM screen_usage_logs WHERE id = ? AND family_id = ?`
+    ).bind(existingUsageId, familyId).first<{ child_id: string; source: string; minutes: number; reason: string }>();
+
+    if (existingUsage) {
+      const normalizedReason = reason || '';
+      const sameRequest =
+        existingUsage.child_id === childId &&
+        Number(existingUsage.minutes) === minutes &&
+        existingUsage.source === source &&
+        existingUsage.reason === normalizedReason;
+
+      if (!sameRequest) {
+        return { success: false, error: 'מזהה הבקשה כבר שימש לרישום ניצול אחר' };
+      }
+
+      const existingBalance = await db
+        .prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
+        .bind(childId, familyId)
+        .first<{ available_minutes: number }>();
+      const newBalance = Number(existingBalance?.available_minutes || 0);
+      const warning = newBalance < threshold
+        ? `שים לב: היתרה החדשה (${newBalance} דקות) חורגת מסף האזהרה המשפחתי (${threshold} דקות)`
+        : undefined;
+      return { success: true, warning, newBalance };
+    }
+  }
+
   const now = new Date().toISOString();
   const usageLogId = requestKey ? `manual-usage:${familyId}:${requestKey}` : generateId();
   const txId = requestKey ? `manual-usage-tx:${familyId}:${requestKey}` : generateId();
@@ -480,7 +511,7 @@ export async function getChildWalletSummary(
         COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as spent,
         COALESCE(SUM(CASE WHEN amount > 0 AND created_by = 'academy_sync' THEN amount ELSE 0 END), 0) as academyEarned,
         COALESCE(SUM(CASE WHEN amount > 0 AND created_by = 'academy_sync' THEN 1 ELSE 0 END), 0) as academyQuestions,
-        COALESCE(SUM(CASE WHEN amount > 0 AND created_by <> 'academy_sync' THEN amount ELSE 0 END), 0) as taskEarned
+        COALESCE(SUM(CASE WHEN amount > 0 AND created_by <> 'academy_sync' AND type IN ('earn', 'adjustment') THEN amount ELSE 0 END), 0) as taskEarned
        FROM minute_transactions
        WHERE child_id = ? AND created_at >= ? AND created_at < ?`
     )
