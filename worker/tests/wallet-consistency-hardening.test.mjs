@@ -60,3 +60,22 @@ test('manual task reward override is also integer-only so the minute ledger stay
   assert.match(block, /customRewardMinutes\s*!==\s*undefined/);
   assert.match(block, /Number\.isSafeInteger\(customRewardMinutes\)/);
 });
+
+
+test('manual screen usage is idempotent for repeated client request ids', () => {
+  const block = between(wallet, 'export async function logManualScreenUsage', 'export async function adjustMinutes');
+  assert.match(block, /clientRequestId/);
+  assert.match(block, /manual-usage:/);
+  assert.match(block, /INSERT OR IGNORE INTO screen_usage_logs/);
+  assert.match(block, /NOT EXISTS[\s\S]*minute_transactions/,
+    'the wallet deduction must be guarded by the durable transaction id');
+  assert.match(block, /db\.batch\s*\(/);
+});
+
+test('wallet summary exposes Academy credits and non-Academy earnings separately', () => {
+  const block = wallet.slice(wallet.indexOf('export async function getChildWalletSummary'));
+  assert.match(block, /academyEarnedToday/);
+  assert.match(block, /academyQuestionsToday/);
+  assert.match(block, /taskEarnedToday/);
+  assert.match(block, /created_by\s*=\s*'academy_sync'/);
+});

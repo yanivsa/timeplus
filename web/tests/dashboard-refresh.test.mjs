@@ -37,3 +37,23 @@ test('dashboard snapshot requests retry and cache only the matching child', () =
   assert.match(api, /readDashboardCache\(dashboardSpec\)/);
   assert.match(api, /writeDashboardCache\(dashboardSpec, parsed\)/);
 });
+
+
+test('child dashboard separates Academy, task/bonus and usage minutes', () => {
+  assert.match(child, /academyEarnedToday/);
+  assert.match(child, /academyQuestionsToday/);
+  assert.match(child, /taskEarnedToday/);
+  assert.match(child, /אקדמיה היום/);
+  assert.match(child, /משימות \/ בונוסים/);
+  assert.match(child, /ניצלת היום/);
+  assert.match(child, /היתרה כוללת/);
+});
+
+test('parent manual usage blocks repeat taps and sends an idempotency key', () => {
+  assert.match(parent, /loggingUsage/);
+  assert.match(parent, /loggingUsageRef/);
+  assert.match(parent, /usageRequestIdRef/);
+  assert.match(parent, /clientRequestId:/);
+  assert.match(parent, /if \(loggingUsageRef\.current\) return/);
+  assert.match(parent, /disabled=\{loggingUsage\}/);
+});
