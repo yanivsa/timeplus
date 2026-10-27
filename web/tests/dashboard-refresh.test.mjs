@@ -67,3 +67,12 @@ test('child write actions use synchronous refs to absorb rapid repeat taps', () 
   assert.match(child, /if \(submittingRequestRef\.current\) return/);
   assert.match(child, /if \(screenSessionBusyRef\.current\) return/);
 });
+
+test('parent minute adjustment blocks repeat taps and requires a reason when deducting', () => {
+  assert.match(parent, /adjustingMinutesRef/);
+  assert.match(parent, /adjustRequestIdRef/);
+  assert.match(parent, /if \(!adjustModalChild \|\| adjustingMinutesRef\.current\) return/);
+  assert.match(parent, /clientRequestId[,}:]/);
+  assert.match(parent, /disabled=\{adjustingMinutes\}/);
+  assert.match(parent, /required=\{adjustMinutesDelta < 0\}/);
+});

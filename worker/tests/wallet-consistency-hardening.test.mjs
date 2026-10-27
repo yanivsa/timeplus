@@ -107,3 +107,23 @@ test('parent usage route forwards the stable client request id to the wallet', (
   assert.match(route, /clientRequestId/);
   assert.match(route, /logManualScreenUsage\([^)]*clientRequestId/);
 });
+
+test('manual minute adjustment is idempotent for repeated client request ids', () => {
+  const block = between(wallet, 'export async function adjustMinutes', 'export async function correctUsage');
+  assert.match(block, /clientRequestId/);
+  assert.match(block, /manual-adjust:/);
+  assert.match(block, /existingAdjustment/);
+  assert.match(block, /sameRequest/);
+  assert.match(block, /INSERT OR IGNORE INTO minute_transactions/);
+  assert.match(block, /NOT EXISTS[\s\S]*minute_transactions/,
+    'the wallet adjustment must be guarded by the durable transaction id');
+  assert.match(block, /persistedAdjustment/,
+    'the durable row must be revalidated after the batch to cover simultaneous conflicting retries');
+});
+
+test('parent adjustment route forwards the stable client request id to the wallet', () => {
+  const start = index.indexOf("pathname === '/api/parent/minutes/adjust'");
+  const route = index.slice(start, index.indexOf("pathname === '/api/parent/tasks/templates'", start));
+  assert.match(route, /clientRequestId/);
+  assert.match(route, /adjustMinutes\([^)]*clientRequestId/);
+});
