@@ -958,17 +958,18 @@ export default {
         const childId = body.childId;
         const minutesDelta = Number(body.minutesDelta);
         const reason = body.reason || '';
+        const clientRequestId = typeof body.clientRequestId === 'string' ? body.clientRequestId.trim() : null;
 
         if (!childId || isNaN(minutesDelta)) {
           return errorJson('נתונים לא תקינים', 400);
         }
 
-        const result = await adjustMinutes(env.DB, user.familyId, childId, minutesDelta, reason);
+        const result = await adjustMinutes(env.DB, user.familyId, childId, minutesDelta, reason, clientRequestId);
         if (!result.success) {
           return errorJson(result.error || 'עדכון דקות נכשל', 400);
         }
 
-        if (minutesDelta > 0) {
+        if (minutesDelta > 0 && !result.replayed) {
           ctx.waitUntil(
             (async () => {
               try {
