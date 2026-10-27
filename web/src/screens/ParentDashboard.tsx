@@ -1612,12 +1612,49 @@ export const ParentDashboard: React.FC = () => {
             <form onSubmit={handleAdjustMinutes} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-purple-200 mb-1.5">
-                  כמות דקות (חיובי לתוספת, שלילי להפחתה)
+                  פעולה
+                </label>
+                <div className="grid grid-cols-2 gap-2 mb-3" role="group" aria-label="בחירת הוספה או הפחתה של דקות">
+                  <button
+                    type="button"
+                    onClick={() => setAdjustMinutesDelta(Math.max(1, Math.abs(adjustMinutesDelta)))}
+                    aria-pressed={adjustMinutesDelta >= 0}
+                    className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-3 font-semibold transition-colors ${
+                      adjustMinutesDelta >= 0
+                        ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
+                        : 'bg-night-950 border-purple-500/30 text-purple-200 hover:border-emerald-400/60'
+                    }`}
+                  >
+                    <PlusCircle className="h-5 w-5" />
+                    הוסף דקות
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdjustMinutesDelta(-Math.max(1, Math.abs(adjustMinutesDelta)))}
+                    aria-pressed={adjustMinutesDelta < 0}
+                    className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-3 font-semibold transition-colors ${
+                      adjustMinutesDelta < 0
+                        ? 'bg-rose-500/20 border-rose-400 text-rose-200'
+                        : 'bg-night-950 border-purple-500/30 text-purple-200 hover:border-rose-400/60'
+                    }`}
+                  >
+                    <MinusCircle className="h-5 w-5" />
+                    הפחת דקות
+                  </button>
+                </div>
+                <label className="block text-xs font-semibold text-purple-200 mb-1.5">
+                  כמות דקות
                 </label>
                 <input
                   type="number"
-                  value={adjustMinutesDelta}
-                  onChange={(e) => setAdjustMinutesDelta(Number(e.target.value))}
+                  inputMode="numeric"
+                  min={1}
+                  step={1}
+                  value={Math.abs(adjustMinutesDelta)}
+                  onChange={(e) => {
+                    const value = Math.abs(Number(e.target.value));
+                    setAdjustMinutesDelta(adjustMinutesDelta < 0 ? -value : value);
+                  }}
                   required
                   className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-3 text-lg font-mono text-center text-white focus:outline-none focus:border-gold-400"
                 />
