@@ -364,12 +364,14 @@ export async function adjustMinutes(
   familyId: string,
   childId: string,
   minutesDelta: number,
-  reason: string
-): Promise<{ success: boolean; error?: string; warning?: string; newBalance?: number }> {
+  reason: string,
+  clientRequestId: string | null = null
+): Promise<{ success: boolean; error?: string; warning?: string; newBalance?: number; replayed?: boolean }> {
   if (!Number.isSafeInteger(minutesDelta) || minutesDelta === 0) {
     return { success: false, error: 'שינוי הדקות חייב להיות מספר שלם ושונה מאפס' };
   }
-  if (minutesDelta < 0 && (!reason || reason.trim() === '')) {
+  const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
+  if (minutesDelta < 0 && !normalizedReason) {
     return { success: false, error: 'הפחתת דקות דורשת ציון סיבה' };
   }
 
@@ -384,14 +386,52 @@ export async function adjustMinutes(
     .bind(familyId)
     .first<{ warning_debt_threshold: number }>();
   const threshold = settings?.warning_debt_threshold ?? -60;
+  const ledgerReason = normalizedReason || (minutesDelta > 0 ? 'תוספת דקות ידנית' : 'הפחתת דקות ידנית');
+  const requestKey = typeof clientRequestId === 'string' ? clientRequestId.trim() : '';
+  if (requestKey && !/^[A-Za-z0-9._:-]{8,160}$/.test(requestKey)) {
+    return { success: false, error: 'מזהה בקשה אינו תקין' };
+  }
+
+  const txId = requestKey ? `manual-adjust:${familyId}:${requestKey}` : generateId();
+  const auditId = requestKey ? `manual-adjust-audit:${familyId}:${requestKey}` : generateId();
+  const rewardId = requestKey ? `manual-adjust-reward:${familyId}:${requestKey}` : generateId();
+
+  if (requestKey) {
+    const existingAdjustment = await db.prepare(
+      `SELECT child_id, amount, COALESCE(reason, '') AS reason
+       FROM minute_transactions WHERE id = ? AND family_id = ?`
+    ).bind(txId, familyId).first<{ child_id: string; amount: number; reason: string }>();
+
+    if (existingAdjustment) {
+      const sameRequest =
+        existingAdjustment.child_id === childId &&
+        Number(existingAdjustment.amount) === minutesDelta &&
+        existingAdjustment.reason === ledgerReason;
+      if (!sameRequest) {
+        return { success: false, error: 'מזהה הבקשה כבר שימש להתאמת דקות אחרת' };
+      }
+
+      const existingBalance = await db.prepare(
+        `SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`
+      ).bind(childId, familyId).first<{ available_minutes: number }>();
+      const newBalance = Number(existingBalance?.available_minutes || 0);
+      const warning = newBalance < threshold
+        ? `שים לב: היתרה החדשה (${newBalance} דקות) נמוכה מסף האזהרה (${threshold} דקות)`
+        : undefined;
+      return { success: true, warning, newBalance, replayed: true };
+    }
+  }
+
   const now = new Date().toISOString();
-  const txId = generateId();
-  const ledgerReason = reason || (minutesDelta > 0 ? 'תוספת דקות ידנית' : 'הפחתת דקות ידנית');
-  const statements = [
-    db.prepare(`UPDATE children SET available_minutes = available_minutes + ?, updated_at = ? WHERE id = ? AND family_id = ?`)
-      .bind(minutesDelta, now, childId, familyId),
+  const statements: D1PreparedStatement[] = [
     db.prepare(
-      `INSERT INTO minute_transactions (
+      `UPDATE children
+       SET available_minutes = available_minutes + ?, updated_at = ?
+       WHERE id = ? AND family_id = ?
+         AND NOT EXISTS (SELECT 1 FROM minute_transactions WHERE id = ? AND family_id = ?)`
+    ).bind(minutesDelta, now, childId, familyId, txId, familyId),
+    db.prepare(
+      `INSERT OR IGNORE INTO minute_transactions (
         id, family_id, child_id, type, amount, balance_after, reason, created_by, created_at
       )
       SELECT ?, ?, c.id, 'adjustment', ?, c.available_minutes, ?, 'parent', ?
@@ -402,21 +442,54 @@ export async function adjustMinutes(
   if (minutesDelta > 0) {
     statements.push(
       db.prepare(
-        `INSERT INTO reward_events (
+        `INSERT OR IGNORE INTO reward_events (
           id, family_id, child_id, type, title, body, minutes_delta, xp_delta, seen_at, created_at
-        ) VALUES (?, ?, ?, 'manual_bonus', ?, ?, ?, 0, NULL, ?)`
-      ).bind(generateId(), familyId, childId, 'קיבלת בונוס דקות!', `נוספו ${minutesDelta} דקות: ${reason}`, minutesDelta, now)
+        )
+        SELECT ?, ?, ?, 'manual_bonus', ?, ?, ?, 0, NULL, ?
+        WHERE EXISTS (
+          SELECT 1 FROM minute_transactions
+          WHERE id = ? AND family_id = ? AND child_id = ? AND amount = ? AND reason = ?
+        )`
+      ).bind(
+        rewardId, familyId, childId, 'קיבלת בונוס דקות!',
+        `נוספו ${minutesDelta} דקות: ${normalizedReason}`, minutesDelta, now,
+        txId, familyId, childId, minutesDelta, ledgerReason
+      )
     );
   }
 
   statements.push(
     db.prepare(
-      `INSERT INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
-       VALUES (?, ?, 'parent', 'parent', 'manual_minute_adjustment', 'minute_transaction', ?, ?, ?)`
-    ).bind(generateId(), familyId, txId, JSON.stringify({ minutesDelta, reason }), now)
+      `INSERT OR IGNORE INTO audit_log (id, family_id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
+       SELECT ?, ?, 'parent', 'parent', 'manual_minute_adjustment', 'minute_transaction', ?, ?, ?
+       WHERE EXISTS (
+         SELECT 1 FROM minute_transactions
+         WHERE id = ? AND family_id = ? AND child_id = ? AND amount = ? AND reason = ?
+       )`
+    ).bind(
+      auditId, familyId, txId, JSON.stringify({ minutesDelta, reason: normalizedReason, clientRequestId: requestKey || null }), now,
+      txId, familyId, childId, minutesDelta, ledgerReason
+    )
   );
 
-  await db.batch(statements);
+  const results = await db.batch(statements);
+  const applied = Number((results[0] as any)?.meta?.changes || 0) > 0;
+
+  if (requestKey) {
+    const persistedAdjustment = await db.prepare(
+      `SELECT child_id, amount, COALESCE(reason, '') AS reason
+       FROM minute_transactions WHERE id = ? AND family_id = ?`
+    ).bind(txId, familyId).first<{ child_id: string; amount: number; reason: string }>();
+    const sameRequest = Boolean(
+      persistedAdjustment &&
+      persistedAdjustment.child_id === childId &&
+      Number(persistedAdjustment.amount) === minutesDelta &&
+      persistedAdjustment.reason === ledgerReason
+    );
+    if (!sameRequest) {
+      return { success: false, error: 'מזהה הבקשה כבר שימש להתאמת דקות אחרת' };
+    }
+  }
 
   const updated = await db.prepare(`SELECT available_minutes FROM children WHERE id = ? AND family_id = ?`)
     .bind(childId, familyId).first<{ available_minutes: number }>();
@@ -425,7 +498,7 @@ export async function adjustMinutes(
     ? `שים לב: היתרה החדשה (${newBalance} דקות) נמוכה מסף האזהרה (${threshold} דקות)`
     : undefined;
 
-  return { success: true, warning, newBalance };
+  return { success: true, warning, newBalance, replayed: requestKey ? !applied : false };
 }
 
 export async function correctUsage(

@@ -124,6 +124,9 @@ export const ParentDashboard: React.FC = () => {
   const [adjustModalChild, setAdjustModalChild] = useState<ChildSummary | null>(null);
   const [adjustMinutesDelta, setAdjustMinutesDelta] = useState<number>(15);
   const [adjustReason, setAdjustReason] = useState('');
+  const [adjustingMinutes, setAdjustingMinutes] = useState(false);
+  const adjustingMinutesRef = useRef(false);
+  const adjustRequestIdRef = useRef<string | null>(null);
 
   const [usageModalChild, setUsageModalChild] = useState<ChildSummary | null>(null);
   const [usageMinutes, setUsageMinutes] = useState<number>(30);
@@ -361,8 +364,25 @@ export const ParentDashboard: React.FC = () => {
   // Minute adjustments
   const handleAdjustMinutes = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adjustModalChild) return;
+    if (!adjustModalChild || adjustingMinutesRef.current) return;
+
+    if (!Number.isSafeInteger(adjustMinutesDelta) || adjustMinutesDelta === 0) {
+      setStatusMessage({ text: 'יש להזין מספר שלם של דקות הגדול מאפס', type: 'error' });
+      return;
+    }
+    if (adjustMinutesDelta < 0 && !adjustReason.trim()) {
+      setStatusMessage({ text: 'בהפחתת דקות חובה לציין סיבה', type: 'error' });
+      return;
+    }
+
+    adjustingMinutesRef.current = true;
+    setAdjustingMinutes(true);
     audio.playTap();
+    const clientRequestId =
+      adjustRequestIdRef.current ||
+      globalThis.crypto?.randomUUID?.() ||
+      `adjust-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    adjustRequestIdRef.current = clientRequestId;
 
     try {
       const res = await apiRequest('/api/parent/minutes/adjust', {
@@ -371,11 +391,13 @@ export const ParentDashboard: React.FC = () => {
           childId: adjustModalChild.id,
           minutesDelta: adjustMinutesDelta,
           reason: adjustReason.trim(),
+          clientRequestId,
         }),
       });
       audio.playApproval();
       setAdjustModalChild(null);
       setAdjustReason('');
+      adjustRequestIdRef.current = null;
       setStatusMessage({
         text: res.warning ? `${res.message} (${res.warning})` : res.message,
         type: res.warning ? 'warning' : 'success',
@@ -384,6 +406,9 @@ export const ParentDashboard: React.FC = () => {
     } catch (err: any) {
       audio.playReject();
       setStatusMessage({ text: err.message || 'עדכון דקות נכשל', type: 'error' });
+    } finally {
+      adjustingMinutesRef.current = false;
+      setAdjustingMinutes(false);
     }
   };
 
@@ -1009,6 +1034,7 @@ export const ParentDashboard: React.FC = () => {
                       setAdjustModalChild(child);
                       setAdjustMinutesDelta(15);
                       setAdjustReason('');
+                      adjustRequestIdRef.current = null;
                     }}
                     className="flex-1 py-2 px-3 rounded-xl bg-night-950 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
                   >
@@ -1604,7 +1630,15 @@ export const ParentDashboard: React.FC = () => {
               <h3 className="font-bold text-base text-gold-300 font-cinzel">
                 הוספה / הפחתת דקות · {adjustModalChild.name}
               </h3>
-              <button onClick={() => setAdjustModalChild(null)}>
+              <button
+                type="button"
+                disabled={adjustingMinutes}
+                onClick={() => {
+                  setAdjustModalChild(null);
+                  adjustRequestIdRef.current = null;
+                }}
+                aria-label="סגירת חלון התאמת דקות"
+              >
                 <X className="h-5 w-5 text-purple-400 hover:text-white" />
               </button>
             </div>
@@ -1617,8 +1651,9 @@ export const ParentDashboard: React.FC = () => {
                 <div className="grid grid-cols-2 gap-2 mb-3" role="group" aria-label="בחירת הוספה או הפחתה של דקות">
                   <button
                     type="button"
-                    onClick={() => setAdjustMinutesDelta(Math.max(1, Math.abs(adjustMinutesDelta)))}
+                    onClick={() => { adjustRequestIdRef.current = null; setAdjustMinutesDelta(Math.max(1, Math.abs(adjustMinutesDelta))); }}
                     aria-pressed={adjustMinutesDelta >= 0}
+                    disabled={adjustingMinutes}
                     className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-3 font-semibold transition-colors ${
                       adjustMinutesDelta >= 0
                         ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
@@ -1630,8 +1665,9 @@ export const ParentDashboard: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setAdjustMinutesDelta(-Math.max(1, Math.abs(adjustMinutesDelta)))}
+                    onClick={() => { adjustRequestIdRef.current = null; setAdjustMinutesDelta(-Math.max(1, Math.abs(adjustMinutesDelta))); }}
                     aria-pressed={adjustMinutesDelta < 0}
+                    disabled={adjustingMinutes}
                     className={`flex items-center justify-center gap-2 rounded-xl border px-3 py-3 font-semibold transition-colors ${
                       adjustMinutesDelta < 0
                         ? 'bg-rose-500/20 border-rose-400 text-rose-200'
@@ -1652,9 +1688,11 @@ export const ParentDashboard: React.FC = () => {
                   step={1}
                   value={Math.abs(adjustMinutesDelta)}
                   onChange={(e) => {
+                    adjustRequestIdRef.current = null;
                     const value = Math.abs(Number(e.target.value));
                     setAdjustMinutesDelta(adjustMinutesDelta < 0 ? -value : value);
                   }}
+                  disabled={adjustingMinutes}
                   required
                   className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-3 text-lg font-mono text-center text-white focus:outline-none focus:border-gold-400"
                 />
@@ -1667,7 +1705,12 @@ export const ParentDashboard: React.FC = () => {
                 <input
                   type="text"
                   value={adjustReason}
-                  onChange={(e) => setAdjustReason(e.target.value)}
+                  onChange={(e) => {
+                    adjustRequestIdRef.current = null;
+                    setAdjustReason(e.target.value);
+                  }}
+                  required={adjustMinutesDelta < 0}
+                  disabled={adjustingMinutes}
                   placeholder="למשל: בונוס עזרה, או חריגה מזמן מסך"
                   className="w-full rounded-xl bg-night-950 border border-purple-500/30 p-3 text-sm text-white focus:outline-none focus:border-gold-400"
                 />
@@ -1675,9 +1718,10 @@ export const ParentDashboard: React.FC = () => {
 
               <button
                 type="submit"
-                className="w-full py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 hover:from-gold-300 transition text-sm shadow-md"
+                disabled={adjustingMinutes}
+                className="w-full py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 hover:from-gold-300 transition text-sm shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                אישור ועדכון יתרה
+                {adjustingMinutes ? 'מעדכן…' : 'אישור ועדכון יתרה'}
               </button>
             </form>
           </div>
@@ -2471,6 +2515,7 @@ export const ParentDashboard: React.FC = () => {
                   setAdjustModalChild(selectedChildDetails.child);
                   setAdjustMinutesDelta(15);
                   setAdjustReason('');
+                  adjustRequestIdRef.current = null;
                 }}
                 className="flex-1 py-2.5 px-3 rounded-xl bg-night-900 hover:bg-night-850 border border-purple-500/30 text-purple-200 text-xs font-bold transition flex items-center justify-center gap-1.5"
               >
