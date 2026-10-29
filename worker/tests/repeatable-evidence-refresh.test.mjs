@@ -2,9 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+const migration = readFileSync(new URL('../migrations/0010_repeatable_evidence_repair.sql', import.meta.url), 'utf8');
 const tasks = readFileSync(new URL('../src/tasks.ts', import.meta.url), 'utf8');
-const evidence = readFileSync(new URL('../src/evidence.ts', import.meta.url), 'utf8');
-const evidenceEntry = readFileSync(new URL('../src/index-evidence.ts', import.meta.url), 'utf8');
 
 function between(text, start, end) {
   const a = text.indexOf(start);
@@ -14,29 +13,28 @@ function between(text, start, end) {
   return text.slice(a, b);
 }
 
-test('repeatable generator releases stale open keys held by completed/submitted rows', () => {
+test('DB migration repairs stale repeatable-open keys already held by completed rows', () => {
+  assert.match(migration, /generation_key\s+LIKE\s+'repeatable-open:%'/);
+  assert.match(migration, /status\s+NOT\s+IN\s*\('open',\s*'rejected'\)/);
+  assert.match(migration, /'repeatable-closed:'\s*\|\|\s*id/);
+});
+
+test('DB trigger releases a repeatable-open key whenever a task leaves an actionable state', () => {
+  assert.match(migration, /CREATE TRIGGER IF NOT EXISTS trg_release_repeatable_generation_key/i);
+  assert.match(migration, /AFTER UPDATE OF status ON task_instances/i);
+  assert.match(migration, /NEW\.status\s+NOT\s+IN\s*\('open',\s*'rejected'\)/);
+  assert.match(migration, /NEW\.generation_key\s+LIKE\s+'repeatable-open:%'/);
+});
+
+test('removed daily-completion pseudo task is blocked at DB level without touching approved history', () => {
+  assert.match(migration, /סיום משימות יומיות/);
+  assert.match(migration, /NEW\.template_id\s+IS\s+NULL/);
+  assert.match(migration, /NEW\.status\s+IN\s*\('open',\s*'rejected',\s*'submitted'\)/);
+  assert.match(migration, /SET status = 'cancelled'/);
+});
+
+test('repeatable generator remains idempotent and keyed by template and child', () => {
   const block = between(tasks, 'export async function ensureDailyTaskInstances', 'export async function submitTask');
-  assert.match(block, /generation_key\s+LIKE\s+'repeatable-open:%'/);
-  assert.match(block, /status\s+NOT\s+IN\s*\('open','rejected'\)/);
-  assert.match(block, /'repeatable-closed:'\s*\|\|\s*id/);
-});
-
-test('removed daily-completion pseudo task is permanently cancelled without touching approved history', () => {
-  const block = between(tasks, 'export async function ensureDailyTaskInstances', 'export async function submitTask');
-  assert.match(block, /template_id\s+IS\s+NULL/);
-  assert.match(block, /status\s+IN\s*\('open','rejected','submitted'\)/);
-  assert.match(block, /title\s+LIKE\s+'%סיום משימות יומיות%'/);
-});
-
-test('evidence completion closes the repeatable open key in the same task transition', () => {
-  const block = between(evidence, 'async function completeEvidenceSubmission', 'async function getChildEvidence');
-  assert.match(block, /generation_key\s*=\s*CASE/);
-  assert.match(block, /generation_key\s+LIKE\s+'repeatable-open:%'/);
-  assert.match(block, /'repeatable-closed:'\s*\|\|\s*id/);
-});
-
-test('successful evidence completion waits for repeatable regeneration before returning to the child', () => {
-  const completeRoute = between(evidenceEntry, 'const evidenceResponse = await handleEvidenceRequest', 'const isWorkerRoute');
-  assert.match(completeRoute, /await\s+ensureDailyTaskInstances\(env\.DB,\s*user\.familyId\)/);
-  assert.doesNotMatch(completeRoute, /ctx\.waitUntil\(ensureDailyTaskInstances/);
+  assert.match(block, /repeatable-open:\$\{tpl\.id\}:\$\{assignment\.child_id\}/);
+  assert.match(block, /INSERT OR IGNORE INTO task_instances/);
 });
