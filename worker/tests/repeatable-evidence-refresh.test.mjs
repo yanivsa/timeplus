@@ -21,6 +21,13 @@ test('repeatable generator releases stale open keys held by completed/submitted 
   assert.match(block, /'repeatable-closed:'\s*\|\|\s*id/);
 });
 
+test('removed daily-completion pseudo task is permanently cancelled without touching approved history', () => {
+  const block = between(tasks, 'export async function ensureDailyTaskInstances', 'export async function submitTask');
+  assert.match(block, /template_id\s+IS\s+NULL/);
+  assert.match(block, /status\s+IN\s*\('open','rejected','submitted'\)/);
+  assert.match(block, /title\s+LIKE\s+'%סיום משימות יומיות%'/);
+});
+
 test('evidence completion closes the repeatable open key in the same task transition', () => {
   const block = between(evidence, 'async function completeEvidenceSubmission', 'async function getChildEvidence');
   assert.match(block, /generation_key\s*=\s*CASE/);
