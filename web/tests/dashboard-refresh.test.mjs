@@ -38,7 +38,6 @@ test('dashboard snapshot requests retry and cache only the matching child', () =
   assert.match(api, /writeDashboardCache\(dashboardSpec, parsed\)/);
 });
 
-
 test('child dashboard separates Academy, task/bonus and usage minutes', () => {
   assert.match(child, /academyEarnedToday/);
   assert.match(child, /academyQuestionsToday/);
@@ -49,6 +48,19 @@ test('child dashboard separates Academy, task/bonus and usage minutes', () => {
   assert.match(child, /היתרה כוללת/);
 });
 
+test('child dashboard loads independent refresh resources in parallel', () => {
+  const start = child.indexOf('const loadDashboard = async () => {');
+  const end = child.indexOf('const loadHistory = async () => {', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const block = child.slice(start, end);
+  assert.match(block, /Promise\.all\(/);
+  assert.match(block, /api\/child\/dashboard\?childId=/);
+  assert.match(block, /api\/child\/tasks\?childId=/);
+  assert.match(block, /api\/child\/screen-session/);
+  assert.match(block, /api\/child\/celebration\?childId=/);
+});
+
 test('parent manual usage blocks repeat taps and sends an idempotency key', () => {
   assert.match(parent, /loggingUsage/);
   assert.match(parent, /loggingUsageRef/);
@@ -57,7 +69,6 @@ test('parent manual usage blocks repeat taps and sends an idempotency key', () =
   assert.match(parent, /loggingUsageRef\.current\) return/);
   assert.match(parent, /disabled=\{loggingUsage\}/);
 });
-
 
 test('child write actions use synchronous refs to absorb rapid repeat taps', () => {
   assert.match(child, /submittingTaskRef/);
