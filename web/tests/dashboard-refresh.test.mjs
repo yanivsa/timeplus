@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const child = fs.readFileSync('web/src/screens/ChildDashboard.tsx', 'utf8');
+const evidencePanel = fs.readFileSync('web/src/components/ChildEvidencePanel.tsx', 'utf8');
 const parent = fs.readFileSync('web/src/screens/ParentDashboard.tsx', 'utf8');
 const guard = fs.readFileSync('web/src/components/ChildDashboardGuard.tsx', 'utf8');
 const api = fs.readFileSync('web/src/services/api.ts', 'utf8');
@@ -38,7 +39,6 @@ test('dashboard snapshot requests retry and cache only the matching child', () =
   assert.match(api, /writeDashboardCache\(dashboardSpec, parsed\)/);
 });
 
-
 test('child dashboard separates Academy, task/bonus and usage minutes', () => {
   assert.match(child, /academyEarnedToday/);
   assert.match(child, /academyQuestionsToday/);
@@ -49,6 +49,19 @@ test('child dashboard separates Academy, task/bonus and usage minutes', () => {
   assert.match(child, /היתרה כוללת/);
 });
 
+test('evidence panel retries briefly after submission and keeps refreshing while open', () => {
+  assert.match(evidencePanel, /refreshAfterSubmission/);
+  assert.match(evidencePanel, /template_id/);
+  assert.match(evidencePanel, /\[0,\s*150,\s*350,\s*700,\s*1200\]/);
+  assert.match(evidencePanel, /setInterval\([^,]+,\s*3000\)/);
+  assert.match(evidencePanel, /await refreshAfterSubmission\(submittedTemplateId\)/);
+});
+
+test('evidence panel permanently hides the removed daily-completion pseudo task', () => {
+  assert.match(evidencePanel, /סיום משימות יומיות/);
+  assert.match(evidencePanel, /!t\.title\.includes\('סיום משימות יומיות'\)/);
+});
+
 test('parent manual usage blocks repeat taps and sends an idempotency key', () => {
   assert.match(parent, /loggingUsage/);
   assert.match(parent, /loggingUsageRef/);
@@ -57,7 +70,6 @@ test('parent manual usage blocks repeat taps and sends an idempotency key', () =
   assert.match(parent, /loggingUsageRef\.current\) return/);
   assert.match(parent, /disabled=\{loggingUsage\}/);
 });
-
 
 test('child write actions use synchronous refs to absorb rapid repeat taps', () => {
   assert.match(child, /submittingTaskRef/);
