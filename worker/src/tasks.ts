@@ -187,6 +187,27 @@ export async function ensureDailyTaskInstances(
   return createdCount;
 }
 
+export async function ensureDailyTaskInstancesOnce(
+  db: D1Database,
+  familyId: string,
+  targetDateStr: string = getIsraelDateString()
+): Promise<number> {
+  const key = `daily-task-generation:${familyId}:${targetDateStr}`;
+  const existing = await db.prepare(
+    `SELECT 1 AS found FROM idempotency_keys WHERE key = ? AND action = 'daily_task_generation'`
+  ).bind(key).first<{ found: number }>();
+
+  if (existing) return 0;
+
+  const createdCount = await ensureDailyTaskInstances(db, familyId, targetDateStr);
+  await db.prepare(
+    `INSERT OR IGNORE INTO idempotency_keys (key, action, response_json)
+     VALUES (?, 'daily_task_generation', ?)`
+  ).bind(key, JSON.stringify({ date: targetDateStr, createdCount })).run();
+
+  return createdCount;
+}
+
 export async function submitTask(
   db: D1Database,
   instanceId: string,
