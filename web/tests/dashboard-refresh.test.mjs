@@ -28,7 +28,7 @@ test('background dashboard refresh is throttled and cannot overlap', () => {
 
 test('parent evidence list is not fetched by the general dashboard poller', () => {
   const start = parent.indexOf('const loadDashboard = async');
-  const end = parent.indexOf('const loadTemplates = async');
+  const end = parent.indexOf('const loadEvidenceForApprovals = async');
   assert.ok(start >= 0 && end > start);
   const dashboardLoader = parent.slice(start, end);
   assert.doesNotMatch(dashboardLoader, /\/api\/parent\/evidence/);
