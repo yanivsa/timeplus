@@ -19,6 +19,7 @@ import {
 } from './init';
 import {
   ensureDailyTaskInstances,
+  ensureDailyTaskInstancesOnce,
   submitTask,
   approveTask,
   rejectTask,
@@ -295,8 +296,9 @@ export default {
         return errorJson('נדרשת התחברות למערכת', 401);
       }
 
-      // Lazy generation of today's instances
-      await ensureDailyTaskInstances(env.DB, user.familyId);
+      // Generate/reconcile today's task instances at most once per family/day.
+      // Template mutations still call the full reconciler explicitly so changes remain immediate.
+      await ensureDailyTaskInstancesOnce(env.DB, user.familyId);
 
       // --- CHILD ROUTES ---
       if (pathname === '/api/child/dashboard' && method === 'GET') {
@@ -1461,7 +1463,7 @@ export default {
     const scheduledAt = new Date(event.scheduledTime);
     if (scheduledAt.getUTCHours() === 3 && scheduledAt.getUTCMinutes() === 0) {
       const familyId = env.DEFAULT_FAMILY_ID || 'yaniv_family';
-      await ensureDailyTaskInstances(env.DB, familyId);
+      await ensureDailyTaskInstancesOnce(env.DB, familyId);
     }
   },
 };

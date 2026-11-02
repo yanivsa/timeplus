@@ -9,6 +9,8 @@ const parent = fs.readFileSync('web/src/screens/ParentDashboard.tsx', 'utf8');
 const guard = fs.readFileSync('web/src/components/ChildDashboardGuard.tsx', 'utf8');
 const api = fs.readFileSync('web/src/services/api.ts', 'utf8');
 const app = fs.readFileSync('web/src/App.tsx', 'utf8');
+const workerIndex = fs.readFileSync('worker/src/index.ts', 'utf8');
+const workerTasks = fs.readFileSync('worker/src/tasks.ts', 'utf8');
 
 test('background dashboard refresh is throttled and cannot overlap', () => {
   assert.match(child, /dashboardRefreshInFlightRef/);
@@ -59,6 +61,18 @@ test('dashboard snapshot failures fall back to cache without retry amplification
   assert.match(api, /CHILD_DASHBOARD_CACHE_PREFIX/);
   assert.match(api, /readDashboardCache\(dashboardSpec\)/);
   assert.match(api, /writeDashboardCache\(dashboardSpec, parsed\)/);
+});
+
+test('authenticated API uses a once-per-day task generation guard instead of full reconciliation on every request', () => {
+  const start = workerIndex.indexOf("if (pathname.startsWith('/api/'))");
+  const end = workerIndex.indexOf('// --- CHILD ROUTES ---', start);
+  assert.ok(start >= 0 && end > start);
+  const middleware = workerIndex.slice(start, end);
+  assert.match(workerIndex, /ensureDailyTaskInstancesOnce/);
+  assert.match(middleware, /await ensureDailyTaskInstancesOnce\(env\.DB, user\.familyId\)/);
+  assert.doesNotMatch(middleware, /await ensureDailyTaskInstances\(env\.DB, user\.familyId\)/);
+  assert.match(workerTasks, /export async function ensureDailyTaskInstancesOnce/);
+  assert.match(workerTasks, /idempotency_keys/);
 });
 
 test('child dashboard separates Academy, task/bonus and usage minutes', () => {
