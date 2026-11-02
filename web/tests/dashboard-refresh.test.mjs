@@ -49,11 +49,12 @@ test('child dashboard separates Academy, task/bonus and usage minutes', () => {
   assert.match(child, /היתרה כוללת/);
 });
 
-test('evidence panel retries briefly after submission and keeps refreshing while open', () => {
+test('evidence panel refreshes on open and after submission without continuous polling', () => {
   assert.match(evidencePanel, /refreshAfterSubmission/);
   assert.match(evidencePanel, /template_id/);
   assert.match(evidencePanel, /\[0,\s*150,\s*350,\s*700,\s*1200\]/);
-  assert.match(evidencePanel, /setInterval\([^,]+,\s*3000\)/);
+  assert.doesNotMatch(evidencePanel, /setInterval\([^,]+,\s*3000\)/);
+  assert.match(evidencePanel, /if \(!open \|\| !user\?\.id\) return;[\s\S]*?load\(\);/);
   assert.match(evidencePanel, /await refreshAfterSubmission\(submittedTemplateId\)/);
 });
 
