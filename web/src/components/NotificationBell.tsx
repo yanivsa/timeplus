@@ -33,11 +33,20 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
   const [pushSupported, setPushSupported] = useState(false);
   const [subscribing, setSubscribing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const notificationRefreshInFlightRef = useRef(false);
 
   const loadData = async () => {
-    const data = await fetchNotifications();
-    setNotifications(data.notifications);
-    setUnreadCount(data.unreadCount);
+    if (notificationRefreshInFlightRef.current) return;
+    notificationRefreshInFlightRef.current = true;
+    try {
+      const data = await fetchNotifications();
+      setNotifications(data.notifications);
+      setUnreadCount(data.unreadCount);
+    } catch (error) {
+      console.error('Failed to refresh notifications', error);
+    } finally {
+      notificationRefreshInFlightRef.current = false;
+    }
   };
 
   const checkPushState = async () => {
@@ -52,7 +61,9 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
   useEffect(() => {
     loadData();
     checkPushState();
-    const interval = setInterval(loadData, 20000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadData();
+    }, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -99,6 +110,8 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ userRole }) 
     audio.playTap();
     const opening = !isOpen;
     setIsOpen(opening);
+
+    if (opening) void loadData();
 
     if (opening && unreadCount > 0) {
       void handleMarkAllRead();

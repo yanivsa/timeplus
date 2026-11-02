@@ -108,7 +108,7 @@ export async function apiRequest<T = any>(
   }
 
   const dashboardSpec = getDashboardRequestSpec(path, options);
-  const attempts = dashboardSpec ? 3 : 1;
+  const attempts = 1;
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {

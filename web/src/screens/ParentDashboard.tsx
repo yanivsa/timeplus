@@ -101,6 +101,7 @@ export const ParentDashboard: React.FC = () => {
   ];
   const [activeTab, setActiveTab] = useState<'overview' | 'approvals' | 'tasks' | 'usage' | 'history' | 'stats' | 'settings'>('overview');
   const [loading, setLoading] = useState(true);
+  const dashboardRefreshInFlightRef = useRef(false);
 
   // Data
   const [children, setChildren] = useState<ChildSummary[]>([]);
@@ -187,6 +188,8 @@ export const ParentDashboard: React.FC = () => {
 
   // Load parent data
   const loadDashboard = async () => {
+    if (dashboardRefreshInFlightRef.current) return;
+    dashboardRefreshInFlightRef.current = true;
     try {
       const res = await apiRequest('/api/parent/dashboard');
       setChildren(res.children || []);
@@ -196,25 +199,29 @@ export const ParentDashboard: React.FC = () => {
       setPendingTasks(approvalsRes.pendingTasks || []);
       setPendingRequests(approvalsRes.pendingRequests || []);
 
-      try {
-        const evidenceRes = await apiRequest('/api/parent/evidence?limit=100');
-        const pendingEvidence = (evidenceRes.submissions || [])
-          .filter((submission: any) => submission?.status === 'pending' && submission?.task_instance_id);
-        const byTask: Record<string, any> = {};
-        for (const submission of pendingEvidence) {
-          const taskId = String(submission.task_instance_id);
-          if (!byTask[taskId]) byTask[taskId] = submission;
-        }
-        setEvidenceTaskIds(new Set(Object.keys(byTask)));
-        setEvidenceByTaskId(byTask);
-      } catch {
-        setEvidenceTaskIds(new Set());
-        setEvidenceByTaskId({});
-      }
     } catch (e) {
       console.error('Failed to load parent dashboard', e);
     } finally {
+      dashboardRefreshInFlightRef.current = false;
       setLoading(false);
+    }
+  };
+
+  const loadEvidenceForApprovals = async () => {
+    try {
+      const evidenceRes = await apiRequest('/api/parent/evidence?limit=100');
+      const pendingEvidence = (evidenceRes.submissions || [])
+        .filter((submission: any) => submission?.status === 'pending' && submission?.task_instance_id);
+      const byTask: Record<string, any> = {};
+      for (const submission of pendingEvidence) {
+        const taskId = String(submission.task_instance_id);
+        if (!byTask[taskId]) byTask[taskId] = submission;
+      }
+      setEvidenceTaskIds(new Set(Object.keys(byTask)));
+      setEvidenceByTaskId(byTask);
+    } catch {
+      setEvidenceTaskIds(new Set());
+      setEvidenceByTaskId({});
     }
   };
 
@@ -256,11 +263,28 @@ export const ParentDashboard: React.FC = () => {
 
   useEffect(() => {
     loadDashboard();
-    const interval = setInterval(loadDashboard, 15000);
-    return () => clearInterval(interval);
+
+    const syncWhenForegrounded = () => {
+      if (document.visibilityState === 'visible') loadDashboard();
+    };
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') loadDashboard();
+    }, 60000);
+
+    document.addEventListener('visibilitychange', syncWhenForegrounded);
+    window.addEventListener('focus', syncWhenForegrounded);
+    window.addEventListener('pageshow', syncWhenForegrounded);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', syncWhenForegrounded);
+      window.removeEventListener('focus', syncWhenForegrounded);
+      window.removeEventListener('pageshow', syncWhenForegrounded);
+    };
   }, []);
 
   useEffect(() => {
+    if (activeTab === 'approvals') loadEvidenceForApprovals();
     if (activeTab === 'tasks') loadTemplates();
     if (activeTab === 'history') loadHistory();
     if (activeTab === 'stats') loadStats();
