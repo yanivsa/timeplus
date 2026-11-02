@@ -53,12 +53,11 @@ export const ChildEvidencePanel: React.FC = () => {
     load();
   }, [user?.id]);
 
-  // Keep the reporting categories fresh while the panel is open. This is a
-  // cheap, scoped poll and avoids requiring the child to close/reopen the app.
+  // Refresh once whenever the reporting panel is opened. Continuous polling used
+  // to hit the free Worker CPU limit; post-submission freshness is handled below.
   useEffect(() => {
     if (!open || !user?.id) return;
-    const interval = window.setInterval(load, 3000);
-    return () => window.clearInterval(interval);
+    load();
   }, [open, user?.id]);
 
   // Repeatable tasks are regenerated server-side after a submission. Retry for
