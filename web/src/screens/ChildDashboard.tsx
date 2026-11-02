@@ -30,6 +30,7 @@ import { NotificationBell } from '../components/NotificationBell';
 export const ChildDashboard: React.FC = () => {
   const { user, logout } = useAuth();
   const [loading, setLoading] = useState(true);
+  const dashboardRefreshInFlightRef = useRef(false);
   const [data, setData] = useState<any>(null);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [history, setHistory] = useState<TransactionItem[]>([]);
@@ -61,6 +62,8 @@ export const ChildDashboard: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const loadDashboard = async () => {
+    if (dashboardRefreshInFlightRef.current) return;
+    dashboardRefreshInFlightRef.current = true;
     try {
       const res = await apiRequest(`/api/child/dashboard?childId=${user?.id}`);
       setData(res);
@@ -80,6 +83,7 @@ export const ChildDashboard: React.FC = () => {
     } catch (e) {
       console.error('Error loading dashboard', e);
     } finally {
+      dashboardRefreshInFlightRef.current = false;
       setLoading(false);
     }
   };
@@ -104,7 +108,7 @@ export const ChildDashboard: React.FC = () => {
 
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') loadDashboard();
-    }, 10000);
+    }, 60000);
 
     document.addEventListener('visibilitychange', syncWhenForegrounded);
     window.addEventListener('focus', syncWhenForegrounded);

@@ -4,14 +4,36 @@ import fs from 'node:fs';
 
 const child = fs.readFileSync('web/src/screens/ChildDashboard.tsx', 'utf8');
 const evidencePanel = fs.readFileSync('web/src/components/ChildEvidencePanel.tsx', 'utf8');
+const notificationBell = fs.readFileSync('web/src/components/NotificationBell.tsx', 'utf8');
 const parent = fs.readFileSync('web/src/screens/ParentDashboard.tsx', 'utf8');
 const guard = fs.readFileSync('web/src/components/ChildDashboardGuard.tsx', 'utf8');
 const api = fs.readFileSync('web/src/services/api.ts', 'utf8');
 const app = fs.readFileSync('web/src/App.tsx', 'utf8');
 
-test('child refreshes within 10 seconds and parent keeps its 15-second cadence', () => {
-  assert.match(child, /setInterval\(\(\) => \{[\s\S]*?loadDashboard\(\);[\s\S]*?\}, 10000\);/);
-  assert.match(parent, /setInterval\(loadDashboard, 15000\);/);
+test('background dashboard refresh is throttled and cannot overlap', () => {
+  assert.match(child, /dashboardRefreshInFlightRef/);
+  assert.match(child, /if \(dashboardRefreshInFlightRef\.current\) return;/);
+  assert.match(child, /setInterval\(\(\) => \{[\s\S]*?loadDashboard\(\);[\s\S]*?\}, 60000\);/);
+  assert.doesNotMatch(child, /\}, 10000\);/);
+
+  assert.match(parent, /dashboardRefreshInFlightRef/);
+  assert.match(parent, /if \(dashboardRefreshInFlightRef\.current\) return;/);
+  assert.match(parent, /setInterval\(\(\) => \{[\s\S]*?loadDashboard\(\);[\s\S]*?\}, 60000\);/);
+  assert.doesNotMatch(parent, /setInterval\(loadDashboard, 15000\)/);
+
+  assert.match(notificationBell, /notificationRefreshInFlightRef/);
+  assert.match(notificationBell, /setInterval\(\(\) => \{[\s\S]*?loadData\(\);[\s\S]*?\}, 60000\);/);
+  assert.doesNotMatch(notificationBell, /setInterval\(loadData, 20000\)/);
+});
+
+test('parent evidence list is not fetched by the general dashboard poller', () => {
+  const start = parent.indexOf('const loadDashboard = async');
+  const end = parent.indexOf('const loadEvidenceForApprovals = async');
+  assert.ok(start >= 0 && end > start);
+  const dashboardLoader = parent.slice(start, end);
+  assert.doesNotMatch(dashboardLoader, /\/api\/parent\/evidence/);
+  assert.match(parent, /const loadEvidenceForApprovals = async/);
+  assert.match(parent, /activeTab === 'approvals'[\s\S]*?loadEvidenceForApprovals\(\)/);
 });
 
 test('child dashboard refreshes immediately when foregrounded', () => {
@@ -30,8 +52,8 @@ test('child dashboard is not mounted until a real wallet snapshot is verified', 
   assert.match(guard, /if \(ready\) return <ChildDashboard \/>/);
 });
 
-test('dashboard snapshot requests retry and cache only the matching child', () => {
-  assert.match(api, /const attempts = dashboardSpec \? 3 : 1/);
+test('dashboard snapshot failures fall back to cache without retry amplification', () => {
+  assert.match(api, /const attempts = 1;/);
   assert.match(api, /for \(let attempt = 1; attempt <= attempts; attempt\+\+\)/);
   assert.match(api, /value\?\.child\?\.id === childId/);
   assert.match(api, /CHILD_DASHBOARD_CACHE_PREFIX/);
