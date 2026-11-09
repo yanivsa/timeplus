@@ -11,7 +11,7 @@ on:
 
 jobs:
   release-gate:
-    name: Time+ 1.0.5 pre-release gate
+    name: Time+ 1.0.6 pre-release gate
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -49,8 +49,8 @@ jobs:
         run: |
           set -euo pipefail
           grep -q 'applicationId "com.yanivsa.timeplus"' android/app/build.gradle
-          grep -q 'versionCode 6' android/app/build.gradle
-          grep -q 'versionName "1.0.5"' android/app/build.gradle
+          grep -q 'versionCode 7' android/app/build.gradle
+          grep -q 'versionName "1.0.6"' android/app/build.gradle
           grep -q '"package_name": "com.yanivsa.timeplus"' android/app/google-services.json
           grep -q '"project_id": "timeplus-e2f2f"' android/app/google-services.json
           grep -q 'android.permission.POST_NOTIFICATIONS' android/app/src/main/AndroidManifest.xml
@@ -67,7 +67,7 @@ jobs:
           grep -q 'FALLBACK_URL = "https://timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q '"timeplus-app.pages.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
           grep -q '"timeplus.yanivsa.workers.dev"' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
-          grep -q 'TimePlusApp/1.0.5' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
+          grep -q 'TimePlusApp/1.0.6' android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt
 
       - name: Verify native notification and alarm plumbing
         run: |
@@ -132,7 +132,7 @@ jobs:
       - name: Upload unsigned QA release artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: timeplus-1.0.5-pre-release
+          name: timeplus-1.0.6-pre-release
           path: |
             android/app/build/outputs/bundle/release/app-release.aab
             android/app/build/outputs/apk/release/*.apk
