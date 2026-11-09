@@ -312,6 +312,9 @@ export const ParentDashboard: React.FC = () => {
         ? activeAssets.find((item: any) => item.kind === 'original' && String(item.mime_type || '').startsWith('video/'))
           || activeAssets.find((item: any) => String(item.mime_type || '').startsWith('video/'))
           || activeAssets.find((item: any) => ['contact_sheet', 'keyframe'].includes(item.kind))
+        : mediaKind === 'audio'
+          ? activeAssets.find((item: any) => item.kind === 'original' && String(item.mime_type || '').startsWith('audio/'))
+            || activeAssets.find((item: any) => String(item.mime_type || '').startsWith('audio/'))
         : activeAssets.find((item: any) => item.kind === 'normalized' && String(item.mime_type || '').startsWith('image/'))
           || activeAssets.find((item: any) => item.kind === 'original' && String(item.mime_type || '').startsWith('image/'))
           || activeAssets.find((item: any) => String(item.mime_type || '').startsWith('image/'))
@@ -1156,10 +1159,10 @@ export const ParentDashboard: React.FC = () => {
                               className="inline-flex items-center rounded-lg border border-cyan-500/30 bg-cyan-950/40 px-2 py-0.5 font-semibold text-cyan-300 hover:bg-cyan-900/50 hover:text-cyan-100 transition"
                               title="צפייה בתיעוד המצורף"
                             >
-                              📎 תיעוד מצורף · לצפייה
+                              {evidenceByTaskId[t.id]?.media_kind === 'audio' ? 'האזן להקלטה' : '📎 תיעוד מצורף · לצפייה'}
                             </button>
                           )}
-                          {evidenceByTaskId[t.id] && evidenceByTaskId[t.id].review_mode !== 'automatic' && (
+                          {evidenceByTaskId[t.id] && evidenceByTaskId[t.id].media_kind !== 'audio' && evidenceByTaskId[t.id].review_mode !== 'automatic' && (
                             <span className="inline-flex items-center rounded-lg border border-violet-500/30 bg-violet-950/40 px-2 py-0.5 font-semibold text-violet-200">
                               🤖 {getAiApprovalConfidence(evidenceByTaskId[t.id]) !== null
                                 ? `ביטחון AI באישור: ${getAiApprovalConfidence(evidenceByTaskId[t.id])}%`
@@ -1614,6 +1617,11 @@ export const ParentDashboard: React.FC = () => {
                       preload="metadata"
                       className="max-h-[65vh] w-full rounded-2xl bg-black object-contain"
                     />
+                  ) : String(evidenceViewer.asset.mime_type || '').startsWith('audio/') ? (
+                    <div className="w-full rounded-2xl bg-night-950/80 border border-cyan-500/30 p-5 space-y-3 text-center">
+                      <p className="text-sm font-semibold text-cyan-200">האזן להקלטת הקריאה באנגלית</p>
+                      <audio src={evidenceViewer.mediaUrl} controls preload="metadata" className="w-full" />
+                    </div>
                   ) : (
                     <img
                       src={evidenceViewer.mediaUrl}
@@ -1621,7 +1629,7 @@ export const ParentDashboard: React.FC = () => {
                       className="max-h-[65vh] mx-auto max-w-full rounded-2xl object-contain"
                     />
                   )}
-                  {evidenceViewer.submission?.review_mode !== 'automatic' && (
+                  {evidenceViewer.submission?.media_kind !== 'audio' && evidenceViewer.submission?.review_mode !== 'automatic' && (
                     <div className="rounded-2xl border border-violet-500/30 bg-violet-950/35 p-3 text-right">
                       <div className="flex flex-wrap items-center gap-2 text-sm font-bold text-violet-100">
                         <span>

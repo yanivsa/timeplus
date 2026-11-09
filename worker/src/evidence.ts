@@ -5,18 +5,26 @@ import { verifyEvidenceSubmission } from './ai-verification';
 import { addDaysIso, retentionDaysFor } from './evidence-retention';
 import { AuthUser, Env } from './types';
 
-export type EvidenceMediaKind = 'image' | 'screenshot' | 'video';
-export type EvidenceMediaSource = 'camera_capture' | 'gallery_upload' | 'unknown';
+export type EvidenceMediaKind = 'image' | 'screenshot' | 'video' | 'audio';
+export type EvidenceMediaSource = 'camera_capture' | 'gallery_upload' | 'microphone_recording' | 'unknown';
 export type EvidenceAssetKind = 'original' | 'normalized' | 'contact_sheet' | 'keyframe';
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 25 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
 
-const MEDIA_KINDS = new Set<EvidenceMediaKind>(['image', 'screenshot', 'video']);
-const MEDIA_SOURCES = new Set<EvidenceMediaSource>(['camera_capture', 'gallery_upload', 'unknown']);
+const MEDIA_KINDS = new Set<EvidenceMediaKind>(['image', 'screenshot', 'video', 'audio']);
+const MEDIA_SOURCES = new Set<EvidenceMediaSource>(['camera_capture', 'gallery_upload', 'microphone_recording', 'unknown']);
 const ASSET_KINDS = new Set<EvidenceAssetKind>(['original', 'normalized', 'contact_sheet', 'keyframe']);
 const IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/webm', 'video/quicktime']);
+const AUDIO_MIME_TYPES = new Set(['audio/webm', 'audio/mp4', 'audio/x-m4a', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/aac']);
+
+// Audio is a reading-aloud proof, not a replacement for visual exam verification.
+function isEnglishReadingTask(title: string, description: string): boolean {
+  const text = `${title} ${description}`;
+  return /(?:english|אנגלי)/i.test(text) && /(?:קריא|הקרא|reading|read\b)/i.test(text);
+}
 
 function json(data: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -56,6 +64,12 @@ function objectExtension(contentType: string): string {
   if (contentType === 'video/mp4') return 'mp4';
   if (contentType === 'video/webm') return 'webm';
   if (contentType === 'video/quicktime') return 'mov';
+  if (contentType === 'audio/webm') return 'webm';
+  if (contentType === 'audio/mp4' || contentType === 'audio/x-m4a') return 'm4a';
+  if (contentType === 'audio/mpeg') return 'mp3';
+  if (contentType === 'audio/ogg') return 'ogg';
+  if (contentType === 'audio/wav' || contentType === 'audio/x-wav') return 'wav';
+  if (contentType === 'audio/aac') return 'aac';
   return 'bin';
 }
 
@@ -69,11 +83,25 @@ function looksLikeDeclaredMime(bytes: Uint8Array, contentType: string): boolean 
   if (contentType === 'image/webp') {
     return bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP';
   }
-  if (contentType === 'video/webm') {
+  if (contentType === 'audio/webm' || contentType === 'video/webm') {
     return bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3;
   }
-  if (contentType === 'video/mp4' || contentType === 'video/quicktime') {
+  if (contentType === 'audio/mp4' || contentType === 'audio/x-m4a' || contentType === 'video/mp4' || contentType === 'video/quicktime') {
     return bytes.length >= 12 && String.fromCharCode(...bytes.slice(4, 8)) === 'ftyp';
+  }
+  if (contentType === 'audio/mpeg') {
+    return (bytes.length >= 3 && String.fromCharCode(...bytes.slice(0, 3)) === 'ID3') ||
+      (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0);
+  }
+  if (contentType === 'audio/ogg') {
+    return bytes.length >= 4 && String.fromCharCode(...bytes.slice(0, 4)) === 'OggS';
+  }
+  if (contentType === 'audio/wav' || contentType === 'audio/x-wav') {
+    return bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' &&
+      String.fromCharCode(...bytes.slice(8, 12)) === 'WAVE';
+  }
+  if (contentType === 'audio/aac') {
+    return bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0;
   }
   return false;
 }
@@ -158,7 +186,7 @@ async function createEvidenceSubmission(request: Request, env: Env, user: AuthUs
 
   const task = await env.DB
     .prepare(
-      `SELECT id, family_id, child_id, title, status, allow_video_proof, verification_mode
+      `SELECT id, family_id, child_id, title, description, status, allow_video_proof, verification_mode
        FROM task_instances WHERE id = ? AND child_id = ? AND family_id = ?`
     )
     .bind(taskInstanceId, user.id, user.familyId)
@@ -167,6 +195,9 @@ async function createEvidenceSubmission(request: Request, env: Env, user: AuthUs
   if (!task) return errorJson('המשימה לא נמצאה', 404);
   if (task.status !== 'open' && task.status !== 'rejected') {
     return errorJson('לא ניתן לצרף ראיה למשימה שכבר הוגשה או אושרה', 409);
+  }
+  if (mediaKind === 'audio' && !isEnglishReadingTask(String(task.title || ''), String(task.description || ''))) {
+    return errorJson('הקלטת קריאה זמינה למשימות קריאה באנגלית בלבד', 400);
   }
   if (mediaKind === 'video' && Number(task.allow_video_proof || 0) !== 1) {
     return errorJson('המשימה הזו עדיין לא מאפשרת הוכחת וידאו', 400);
@@ -212,6 +243,7 @@ async function createEvidenceSubmission(request: Request, env: Env, user: AuthUs
       maxImageBytes: MAX_IMAGE_BYTES,
       maxVideoBytes: MAX_VIDEO_BYTES,
       maxVideoSeconds: 30,
+      maxAudioBytes: MAX_AUDIO_BYTES,
     },
   });
 }
@@ -236,11 +268,16 @@ async function uploadEvidenceAsset(
   const contentType = (request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
   const isImage = IMAGE_MIME_TYPES.has(contentType);
   const isVideo = VIDEO_MIME_TYPES.has(contentType);
-  if (!isImage && !isVideo) return errorJson('סוג הקובץ אינו נתמך', 415);
+  const isAudio = AUDIO_MIME_TYPES.has(contentType);
+  if (!isImage && !isVideo && !isAudio) return errorJson('סוג הקובץ אינו נתמך', 415);
 
   if (assetKind !== 'original' && !isImage) {
     return errorJson('קובץ מעובד חייב להיות תמונה', 415);
   }
+  if (submission.media_kind === 'audio' && (assetKind !== 'original' || !isAudio)) {
+    return errorJson('יש להעלות הקלטת שמע מקורית בפורמט נתמך', 415);
+  }
+  if (submission.media_kind !== 'audio' && isAudio) return errorJson('המשימה אינה מצפה לקובץ שמע', 415);
   if (submission.media_kind !== 'video' && isVideo) return errorJson('המשימה מצפה לתמונה ולא לווידאו', 415);
   if (submission.media_kind === 'video' && assetKind === 'original' && !isVideo) {
     return errorJson('קובץ הווידאו המקורי אינו בפורמט נתמך', 415);
@@ -248,10 +285,10 @@ async function uploadEvidenceAsset(
 
   const body = await request.arrayBuffer();
   const bytes = new Uint8Array(body);
-  const maxBytes = isVideo ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
+  const maxBytes = isVideo ? MAX_VIDEO_BYTES : isAudio ? MAX_AUDIO_BYTES : MAX_IMAGE_BYTES;
   if (bytes.byteLength <= 0) return errorJson('הקובץ ריק', 400);
   if (bytes.byteLength > maxBytes) {
-    return errorJson(isVideo ? 'הווידאו גדול מ-25MB' : 'התמונה גדולה מ-8MB', 413);
+    return errorJson(isVideo ? 'הווידאו גדול מ-25MB' : isAudio ? 'הקלטת השמע גדולה מ-20MB' : 'התמונה גדולה מ-8MB', 413);
   }
   if (!looksLikeDeclaredMime(bytes, contentType)) return errorJson('תוכן הקובץ אינו תואם לסוג שדווח', 415);
 
@@ -275,7 +312,7 @@ async function uploadEvidenceAsset(
   const assetId = generateId();
   const ext = objectExtension(contentType);
   const objectKey = `evidence/${user.familyId}/${user.id}/${yyyyMm}/${submissionId}/${assetKind}-${assetId}.${ext}`;
-  const expiresAt = addDaysIso(retentionDaysFor(env, isVideo ? 'video' : submission.media_kind));
+  const expiresAt = addDaysIso(retentionDaysFor(env, submission.media_kind));
 
   await putEvidenceObject(env, objectKey, body, contentType, expiresAt, {
     familyId: user.familyId,
@@ -365,13 +402,13 @@ async function completeEvidenceSubmission(
     .bind(submissionId)
     .all<any>();
 
-  const hasRequiredEvidence = submission.media_kind === 'video'
+  const hasRequiredEvidence = submission.media_kind === 'video' || submission.media_kind === 'audio'
     ? assets.some((asset: any) => asset.kind === 'original')
     : assets.some((asset: any) => asset.kind === 'normalized' || asset.kind === 'original');
   if (!hasRequiredEvidence) return errorJson('לא הועלתה ראיה תקינה', 400);
 
   const duplicateDetected = assets.some((asset: any) => Boolean(asset.duplicate_of_asset_id));
-  const aiEligible = submission.verification_mode === 'ai_media' && String(env.AI_EVIDENCE_ENABLED || 'true') === 'true';
+  const aiEligible = submission.media_kind !== 'audio' && submission.verification_mode === 'ai_media' && String(env.AI_EVIDENCE_ENABLED || 'true') === 'true';
   const nextStatus = duplicateDetected ? 'needs_parent_review' : aiEligible ? 'pending_ai' : 'needs_parent_review';
   const summary = duplicateDetected
     ? 'זוהתה ראיה זהה לראיה קודמת; נדרשת בדיקת הורה.'

@@ -26,6 +26,7 @@ import {
   TrendingDown,
 } from 'lucide-react';
 import { NotificationBell } from '../components/NotificationBell';
+import { EnglishReadingAudioProof, isEnglishReadingTask } from '../components/EnglishReadingAudioProof';
 
 export const ChildDashboard: React.FC = () => {
   const { user, logout } = useAuth();
@@ -707,7 +708,7 @@ export const ChildDashboard: React.FC = () => {
       {/* MODAL 1: SUBMIT TASK */}
       {selectedTask && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-night-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-sm rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
+          <div className="w-full max-w-sm max-h-[90vh] overflow-y-auto rounded-3xl bg-night-900 border border-purple-500/40 p-6 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-base text-gold-300 font-cinzel">הגשת משימה</h3>
               <button
@@ -739,13 +740,27 @@ export const ChildDashboard: React.FC = () => {
                 />
               </div>
 
+              {isEnglishReadingTask(selectedTask) && (
+                <EnglishReadingAudioProof
+                  taskInstanceId={selectedTask.id}
+                  note={submissionNote}
+                  disabled={submittingTask}
+                  onUploaded={async () => {
+                    setSelectedTask(null);
+                    setSubmissionNote('');
+                    setStatusMessage('הקלטת הקריאה נשלחה להאזנה ולאישור ההורים.');
+                    await loadDashboard();
+                  }}
+                />
+              )}
+
               <button
                 type="submit"
                 disabled={submittingTask}
                 className="w-full py-3 rounded-2xl font-bold text-night-950 bg-gradient-to-r from-gold-400 to-amber-400 hover:from-gold-300 hover:to-amber-300 active:scale-95 transition flex items-center justify-center gap-2 text-sm shadow-lg shadow-gold-500/20 disabled:opacity-50"
               >
                 <Send className="h-4 w-4" />
-                <span>{submittingTask ? 'שולח לאישור...' : 'שלח לאישור ההורים'}</span>
+                <span>{submittingTask ? 'שולח לאישור...' : isEnglishReadingTask(selectedTask) ? 'שלח ללא הקלטה' : 'שלח לאישור ההורים'}</span>
               </button>
             </form>
           </div>

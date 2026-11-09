@@ -1,6 +1,6 @@
 import { apiRequest, apiUpload } from './api';
-export type EvidenceMediaSource = 'camera_capture' | 'gallery_upload';
-export type EvidenceMediaKind = 'image' | 'screenshot' | 'video';
+export type EvidenceMediaSource = 'camera_capture' | 'gallery_upload' | 'microphone_recording';
+export type EvidenceMediaKind = 'image' | 'screenshot' | 'video' | 'audio';
 export interface EvidenceSubmissionResult { submissionId:string; status:'pending_ai'|'needs_parent_review'|'ai_unavailable'|'verified'|'rejected_by_ai'; duplicateDetected:boolean; message:string; }
 async function canvasToBlob(canvas:HTMLCanvasElement,quality=.82):Promise<Blob>{ const f=(t:string,q?:number)=>new Promise<Blob|null>(r=>canvas.toBlob(r,t,q)); const w=await f('image/webp',quality); if(w)return w; const j=await f('image/jpeg',Math.min(.88,quality+.04)); if(j)return j; throw new Error('לא ניתן לעבד את המדיה במכשיר זה'); }
 async function loadImage(file:File):Promise<ImageBitmap|HTMLImageElement>{ if('createImageBitmap' in window){try{return await createImageBitmap(file,{imageOrientation:'from-image'});}catch{}} const u=URL.createObjectURL(file); try{const i=new Image();i.decoding='async';i.src=u;await i.decode();return i;}finally{URL.revokeObjectURL(u)} }
@@ -12,3 +12,44 @@ export async function extractVideoEvidence(file:File):Promise<{contactSheet:Blob
 async function complete(id:string){return apiRequest<EvidenceSubmissionResult>(`/api/child/evidence/${id}/complete`,{method:'POST',body:JSON.stringify({})});}
 export async function submitImageEvidence(p:{taskInstanceId:string;file:File;mediaSource:EvidenceMediaSource;note?:string}){const normalized=await normalizeEvidenceImage(p.file),clientSha256=await sha256Blob(normalized),mediaKind:EvidenceMediaKind=p.mediaSource==='gallery_upload'?'screenshot':'image';const st=await apiRequest<{submissionId:string}>('/api/child/evidence/start',{method:'POST',body:JSON.stringify({taskInstanceId:p.taskInstanceId,mediaKind,mediaSource:p.mediaSource,note:p.note||null,clientSha256})});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/normalized`,normalized,{contentType:normalized.type});return{...(await complete(st.submissionId)),clientSha256};}
 export async function submitVideoEvidence(p:{taskInstanceId:string;file:File;mediaSource:EvidenceMediaSource;note?:string}){if(p.file.size>25*1024*1024)throw new Error('הווידאו גדול מ-25MB');const ex=await extractVideoEvidence(p.file);const st=await apiRequest<{submissionId:string}>('/api/child/evidence/start',{method:'POST',body:JSON.stringify({taskInstanceId:p.taskInstanceId,mediaKind:'video',mediaSource:p.mediaSource,note:p.note||null})});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/original`,p.file,{contentType:p.file.type||'video/mp4'});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/contact_sheet`,ex.contactSheet,{contentType:ex.contactSheet.type});for(const f of ex.keyframes)await apiUpload(`/api/child/evidence/${st.submissionId}/asset/keyframe`,f,{contentType:f.type});return{...(await complete(st.submissionId)),duration:ex.duration};}
+
+
+const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
+  webm: 'audio/webm', m4a: 'audio/mp4', mp4: 'audio/mp4',
+  mp3: 'audio/mpeg', ogg: 'audio/ogg', opus: 'audio/ogg',
+  wav: 'audio/wav', aac: 'audio/aac',
+};
+const AUDIO_MIME_TYPES = new Set(Object.values(AUDIO_MIME_BY_EXTENSION));
+export const MAX_AUDIO_EVIDENCE_BYTES = 20 * 1024 * 1024;
+
+/** The parent approves listening tasks manually; never classify audio as visual AI proof. */
+export async function submitAudioEvidence(p: {
+  taskInstanceId: string;
+  file: File;
+  mediaSource: EvidenceMediaSource;
+  note?: string;
+}): Promise<EvidenceSubmissionResult> {
+  if (!p.file.size) throw new Error('לא נמצאה הקלטה לשליחה');
+  if (p.file.size > MAX_AUDIO_EVIDENCE_BYTES) throw new Error('ההקלטה גדולה מ-20MB');
+  const extension = p.file.name.split('.').pop()?.toLowerCase() || '';
+  const declaredType = p.file.type.split(';')[0].toLowerCase();
+  const contentType = AUDIO_MIME_TYPES.has(declaredType)
+    ? declaredType
+    : !declaredType || declaredType === 'application/octet-stream'
+      ? AUDIO_MIME_BY_EXTENSION[extension]
+      : undefined;
+  if (!contentType || !AUDIO_MIME_TYPES.has(contentType)) {
+    throw new Error('יש לבחור קובץ שמע מסוג MP3, M4A, WebM, OGG, WAV או AAC');
+  }
+  const start = await apiRequest<{ submissionId: string }>('/api/child/evidence/start', {
+    method: 'POST',
+    body: JSON.stringify({
+      taskInstanceId: p.taskInstanceId,
+      mediaKind: 'audio',
+      mediaSource: p.mediaSource,
+      note: p.note?.trim() || null,
+    }),
+  });
+  await apiUpload(`/api/child/evidence/${start.submissionId}/asset/original`, p.file, { contentType });
+  return complete(start.submissionId);
+}

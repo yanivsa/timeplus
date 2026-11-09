@@ -19,6 +19,7 @@ import android.provider.Settings
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -64,6 +65,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var retryButton: Button
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    private var pendingAudioPermissionRequest: PermissionRequest? = null
     private var pendingCaptureUri: Uri? = null
     private var activeBaseUrl = PRIMARY_URL
     private var currentPath = "/"
@@ -73,6 +75,17 @@ class MainActivity : AppCompatActivity() {
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
+
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val pending = pendingAudioPermissionRequest
+        pendingAudioPermissionRequest = null
+        if (pending != null) {
+            if (granted) pending.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+            else pending.deny()
+        }
+    }
 
     private val fileChooserLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -154,7 +167,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.5"
+        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.6"
         webView.addJavascriptInterface(NativePushBridge(this), "TimePlusAndroid")
 
         val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -222,6 +235,37 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest?) {
+                if (request == null) return
+                runOnUiThread {
+                    val origin = request.origin
+                    val allowed = origin.scheme == "https" &&
+                        origin.host in ALLOWED_HOSTS &&
+                        request.resources.size == 1 &&
+                        request.resources[0] == PermissionRequest.RESOURCE_AUDIO_CAPTURE
+                    if (!allowed) {
+                        request.deny()
+                        return@runOnUiThread
+                    }
+                    if (ContextCompat.checkSelfPermission(
+                            this@MainActivity, Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                    } else {
+                        pendingAudioPermissionRequest?.deny()
+                        pendingAudioPermissionRequest = request
+                        audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+            }
+
+            override fun onPermissionRequestCanceled(request: PermissionRequest?) {
+                if (pendingAudioPermissionRequest === request) {
+                    pendingAudioPermissionRequest = null
+                }
+            }
+
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 progressBar.progress = newProgress
                 if (newProgress >= 100) {
