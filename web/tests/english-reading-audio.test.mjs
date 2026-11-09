@@ -35,7 +35,16 @@ test('Parents can hear the original audio through authenticated evidence media e
   const parent = read('web/src/screens/ParentDashboard.tsx');
   const server = read('worker/src/evidence.ts');
   assert.match(parent, /mediaKind === 'audio'/);
-  assert.match(parent, /<audio src=\{evidenceViewer\.mediaUrl\} controls/);
+  assert.match(parent, /<AuthenticatedEvidenceAudio src=\{evidenceViewer\.mediaUrl\} autoLoad/);
+  const journal = read('web/src/components/EvidenceJournalPanel.tsx');
+  const authenticatedAudio = read('web/src/components/AuthenticatedEvidenceAudio.tsx');
+  const api = read('web/src/services/api.ts');
+  assert.match(journal, /<AuthenticatedEvidenceAudio className=/);
+  assert.match(authenticatedAudio, /apiMediaBlob\(src\)/);
+  assert.match(authenticatedAudio, /URL\.createObjectURL\(blob\)/);
+  assert.match(authenticatedAudio, /URL\.revokeObjectURL\(objectUrl\)/);
+  assert.match(api, /headers\.set\('Authorization', `Bearer/);
+  assert.match(api, /credentials: 'include'/);
   assert.match(server, /async function streamParentEvidenceAsset/);
   assert.match(server, /if \(user\.role !== 'parent'\)/);
 });
