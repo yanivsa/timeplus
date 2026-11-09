@@ -61,3 +61,11 @@ test('Installed TimePlus 1.0.5 can select an audio file without microphone permi
   assert.match(native, /override fun onShowFileChooser/);
   assert.match(native, /fileChooserParams\?\.createIntent\(\)/);
 });
+
+test('Common Android voice-recorder MIME aliases normalize to supported formats', () => {
+  const client = read('web/src/services/evidence.ts');
+  assert.match(client, /'audio\/x-m4a': 'audio\/mp4'/);
+  assert.match(client, /'audio\/x-wav': 'audio\/wav'/);
+  assert.match(client, /const normalizedType = AUDIO_MIME_ALIASES\[declaredType\]/);
+  assert.match(client, /declaredType\.startsWith\('audio\/'\)/);
+});
