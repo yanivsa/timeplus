@@ -8,6 +8,7 @@ import {
   submitVideoEvidence,
 } from '../services/evidence';
 import { TaskItem } from '../types';
+import { EnglishReadingAudioProof, isEnglishReadingTask } from './EnglishReadingAudioProof';
 
 const isReportableTask = (t: TaskItem) =>
   (t.status === 'open' || t.status === 'rejected') &&
@@ -30,6 +31,7 @@ export const ChildEvidencePanel: React.FC = () => {
   const eligible = useMemo(() => tasks.filter(isReportableTask), [tasks]);
   const selected = eligible.find((t) => t.id === selectedTaskId) || null;
   const videoAllowed = Number(selected?.allow_video_proof || 0) === 1;
+  const audioAllowed = selected ? isEnglishReadingTask(selected) : false;
 
   const load = async (): Promise<TaskItem[]> => {
     if (!user?.id) return [];
@@ -152,7 +154,7 @@ export const ChildEvidencePanel: React.FC = () => {
             <ShieldCheck className="h-5 w-5" />
             תיעוד ביצוע
           </span>
-          <span className="text-xs text-purple-300">צילום / מסך / וידאו</span>
+          <span className="text-xs text-purple-300">צילום / מסך / וידאו / שמע</span>
         </button>
 
         {open && (
@@ -189,6 +191,19 @@ export const ChildEvidencePanel: React.FC = () => {
                     placeholder="מה עשית?"
                   />
                 </label>
+
+                {audioAllowed && (
+                  <EnglishReadingAudioProof
+                    key={selectedTaskId}
+                    taskInstanceId={selectedTaskId}
+                    note={note}
+                    disabled={busy}
+                    onUploaded={async () => {
+                      setNote('');
+                      await refreshAfterSubmission(selected?.template_id || null);
+                    }}
+                  />
+                )}
 
                 <div className="grid grid-cols-2 gap-2">
                   <button
