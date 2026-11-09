@@ -167,7 +167,7 @@ class MainActivity : AppCompatActivity() {
         settings.allowContentAccess = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         settings.cacheMode = WebSettings.LOAD_DEFAULT
-        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.5"
+        settings.userAgentString = settings.userAgentString + " TimePlusApp/1.0.6"
         webView.addJavascriptInterface(NativePushBridge(this), "TimePlusAndroid")
 
         val isDebuggable = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
