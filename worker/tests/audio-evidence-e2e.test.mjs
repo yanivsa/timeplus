@@ -5,13 +5,14 @@ import { existsSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const workerDir = resolve('worker');
+const wranglerBin = resolve('node_modules/.bin/wrangler');
 const persist = resolve('.wrangler-audio-e2e');
 const origin = 'http://127.0.0.1:8799';
 const childToken = 'qa-audio-child-local-only';
 const parentToken = 'qa-audio-parent-local-only';
 
 function wrangler(args, timeout = 120000) {
-  const proc = spawnSync('npx', ['--no-install', 'wrangler', ...args], {
+  const proc = spawnSync(wranglerBin, args, {
     cwd: workerDir, encoding: 'utf8', timeout,
     env: { ...process.env, CI: 'true' },
   });
@@ -76,8 +77,8 @@ test('end to end: audio upload, rejection checks, protected parent playback and 
   wrangler(['d1', 'execute', 'timeplus-db', '--local', '--persist-to', persist, '--file', 'tests/fixtures/audio-e2e.sql'], 120000);
 
   let logs = '';
-  const server = spawn('npx', ['--no-install', 'wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', '8799', '--persist-to', persist], {
-    cwd: workerDir, env: { ...process.env, CI: 'true' }, stdio: ['ignore', 'pipe', 'pipe'],
+  const server = spawn(wranglerBin, ['dev', '--local', '--ip', '127.0.0.1', '--port', '8799', '--persist-to', persist], {
+    cwd: workerDir, env: { ...process.env, CI: 'true' }, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
   });
   server.stdout.on('data', (b) => { logs = (logs + String(b)).slice(-16000); });
   server.stderr.on('data', (b) => { logs = (logs + String(b)).slice(-16000); });
@@ -144,7 +145,8 @@ test('end to end: audio upload, rejection checks, protected parent playback and 
     const again = await request(mediaPath, { token: parentToken });
     assert.equal(again.status, 200, 'Playback still works after approval');
   } finally {
-    server.kill('SIGTERM');
+    // Wrangler may spawn workerd; terminate the entire dedicated process group.
+    try { process.kill(-server.pid, 'SIGTERM'); } catch { server.kill('SIGTERM'); }
     await new Promise((resolve) => {
       if (server.exitCode !== null) return resolve();
       server.once('exit', resolve);
