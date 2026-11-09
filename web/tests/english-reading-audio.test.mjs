@@ -50,3 +50,22 @@ test('Android WebView asks for recording permission only on trusted HTTPS TimePl
   assert.match(main, /request\.resources\.size == 1/);
   assert.match(main, /PermissionRequest\.RESOURCE_AUDIO_CAPTURE/);
 });
+
+test('Installed TimePlus 1.0.5 can select an audio file without microphone permission', () => {
+  const recorder = read('web/src/components/EnglishReadingAudioProof.tsx');
+  const native = read('android/app/src/main/java/com/yanivsa/timeplus/MainActivity.kt');
+  assert.ok(recorder.includes('TimePlusApp\\/1\\.0\\.[0-5]'));
+  assert.match(recorder, /\{canRecordDirectly && <button/);
+  assert.match(recorder, /inputRef\.current\?\.click\(\)/);
+  assert.match(recorder, /accept="audio\/\*/);
+  assert.match(native, /override fun onShowFileChooser/);
+  assert.match(native, /fileChooserParams\?\.createIntent\(\)/);
+});
+
+test('Common Android voice-recorder MIME aliases normalize to supported formats', () => {
+  const client = read('web/src/services/evidence.ts');
+  assert.match(client, /'audio\/x-m4a': 'audio\/mp4'/);
+  assert.match(client, /'audio\/x-wav': 'audio\/wav'/);
+  assert.match(client, /const normalizedType = AUDIO_MIME_ALIASES\[declaredType\]/);
+  assert.match(client, /declaredType\.startsWith\('audio\/'\)/);
+});

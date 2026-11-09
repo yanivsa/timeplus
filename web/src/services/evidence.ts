@@ -20,6 +20,17 @@ const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
   wav: 'audio/wav', aac: 'audio/aac',
 };
 const AUDIO_MIME_TYPES = new Set(Object.values(AUDIO_MIME_BY_EXTENSION));
+// Android voice recorders may use vendor MIME aliases for otherwise standard M4A/WAV/MP3 files.
+// The Worker validates the actual file header, so a mislabeled file cannot bypass verification.
+const AUDIO_MIME_ALIASES: Record<string, string> = {
+  'audio/x-m4a': 'audio/mp4',
+  'audio/m4a': 'audio/mp4',
+  'audio/x-wav': 'audio/wav',
+  'audio/wave': 'audio/wav',
+  'audio/mp3': 'audio/mpeg',
+  'audio/x-mp3': 'audio/mpeg',
+  'audio/x-aac': 'audio/aac',
+};
 export const MAX_AUDIO_EVIDENCE_BYTES = 20 * 1024 * 1024;
 
 /** The parent approves listening tasks manually; never classify audio as visual AI proof. */
@@ -33,9 +44,10 @@ export async function submitAudioEvidence(p: {
   if (p.file.size > MAX_AUDIO_EVIDENCE_BYTES) throw new Error('ההקלטה גדולה מ-20MB');
   const extension = p.file.name.split('.').pop()?.toLowerCase() || '';
   const declaredType = p.file.type.split(';')[0].toLowerCase();
-  const contentType = AUDIO_MIME_TYPES.has(declaredType)
-    ? declaredType
-    : !declaredType || declaredType === 'application/octet-stream'
+  const normalizedType = AUDIO_MIME_ALIASES[declaredType] || declaredType;
+  const contentType = AUDIO_MIME_TYPES.has(normalizedType)
+    ? normalizedType
+    : (!declaredType || declaredType === 'application/octet-stream' || declaredType.startsWith('audio/'))
       ? AUDIO_MIME_BY_EXTENSION[extension]
       : undefined;
   if (!contentType || !AUDIO_MIME_TYPES.has(contentType)) {

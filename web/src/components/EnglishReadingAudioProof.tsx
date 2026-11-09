@@ -21,6 +21,11 @@ interface Props {
 export const EnglishReadingAudioProof: React.FC<Props> = ({
   taskInstanceId, note, disabled = false, onUploaded,
 }) => {
+  // Native TimePlus 1.0.5 supports choosing files, but does not grant WebView microphone access.
+  // Hide only direct capture there; external audio uploads work without installing another APK.
+  const canRecordDirectly = !/\bTimePlusApp\/1\.0\.[0-5]\b/.test(navigator.userAgent)
+    && Boolean(navigator.mediaDevices?.getUserMedia)
+    && typeof window.MediaRecorder !== 'undefined';
   const [file, setFile] = useState<File | null>(null);
   const [source, setSource] = useState<EvidenceMediaSource>('gallery_upload');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -150,9 +155,11 @@ export const EnglishReadingAudioProof: React.FC<Props> = ({
   return (
     <div className="space-y-3 rounded-2xl border border-cyan-500/30 bg-cyan-950/20 p-3" dir="rtl">
       <p className="text-sm font-bold text-cyan-200">הקלטת קריאה באנגלית</p>
-      <p className="text-xs text-purple-200">אורי מקריא את הקטע באנגלית. הקלט או צרף קובץ קיים, האזן ואז שלח לאישור.</p>
-      <div className="grid grid-cols-2 gap-2">
-        <button
+      <p className="text-xs text-purple-200">{canRecordDirectly
+        ? 'אורי מקריא את הקטע באנגלית. הקלט או צרף קובץ קיים, האזן ואז שלח לאישור.'
+        : 'הקלט את הקריאה באפליקציית ההקלטה בטלפון, בחר את הקובץ כאן, האזן ושלח לאישור.'}</p>
+      <div className={`grid gap-2 ${canRecordDirectly ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {canRecordDirectly && <button
           type="button"
           disabled={disabled || uploading}
           onClick={recording ? stopRecording : startRecording}
@@ -160,7 +167,7 @@ export const EnglishReadingAudioProof: React.FC<Props> = ({
         >
           {recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
           {recording ? `עצור (${elapsed} שנ׳)` : 'הקלט עכשיו'}
-        </button>
+        </button>}
         <button
           type="button"
           disabled={disabled || uploading || recording}
