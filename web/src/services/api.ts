@@ -166,3 +166,25 @@ export async function apiUpload<T = any>(
 
   return parseApiResponse<T>(response);
 }
+
+
+/** Download parent-only evidence with Bearer support for restored Android sessions. */
+export async function apiMediaBlob(path: string): Promise<Blob> {
+  if (!/^\/api\/parent\/evidence\/[^/]+\/media\/[^/]+$/.test(path)) {
+    throw new ApiError('נתיב המדיה אינו תקין', 400);
+  }
+
+  const headers = new Headers();
+  if (authToken) headers.set('Authorization', `Bearer ${authToken}`);
+
+  const response = await performFetch(path, {
+    method: 'GET',
+    headers,
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    await parseApiResponse(response);
+    throw new ApiError('לא ניתן לטעון את ההקלטה', response.status);
+  }
+  return response.blob();
+}
