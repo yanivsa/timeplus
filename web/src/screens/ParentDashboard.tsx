@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../services/api';
 import { audio } from '../services/audio';
+import { AuthenticatedEvidenceAudio } from '../components/AuthenticatedEvidenceAudio';
 import {
   ChildSummary,
   PendingApprovalItem,
@@ -1620,7 +1621,7 @@ export const ParentDashboard: React.FC = () => {
                   ) : String(evidenceViewer.asset.mime_type || '').startsWith('audio/') ? (
                     <div className="w-full rounded-2xl bg-night-950/80 border border-cyan-500/30 p-5 space-y-3 text-center">
                       <p className="text-sm font-semibold text-cyan-200">האזן להקלטת הקריאה באנגלית</p>
-                      <audio src={evidenceViewer.mediaUrl} controls preload="metadata" className="w-full" />
+                      <AuthenticatedEvidenceAudio src={evidenceViewer.mediaUrl} autoLoad />
                     </div>
                   ) : (
                     <img
