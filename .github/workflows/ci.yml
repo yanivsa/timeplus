@@ -53,6 +53,9 @@ jobs:
       - name: Build Web Frontend
         run: npm run build:web
 
+      - name: E2E English-reading audio via local D1 KV and protected parent playback
+        run: node --test worker/tests/audio-evidence-e2e.test.mjs
+
       - name: Upload Web dist artifact
         uses: actions/upload-artifact@v7
         with:
