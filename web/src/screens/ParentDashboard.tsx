@@ -111,7 +111,7 @@ export const ParentDashboard: React.FC = () => {
   const [pendingRequests, setPendingRequests] = useState<ScreenTimeRequestItem[]>([]);
   const [evidenceTaskIds, setEvidenceTaskIds] = useState<Set<string>>(new Set());
   const [evidenceByTaskId, setEvidenceByTaskId] = useState<Record<string, any>>({});
-  const [evidenceViewer, setEvidenceViewer] = useState<{ submission: any; asset: any | null; mediaUrl: string } | null>(null);
+  const [evidenceViewer, setEvidenceViewer] = useState<{ submission: any; asset: any | null; mediaUrl: string; images: any[]; selectedIndex: number } | null>(null);
   const [evidenceViewerLoading, setEvidenceViewerLoading] = useState(false);
   const [evidenceViewerError, setEvidenceViewerError] = useState<string | null>(null);
   const [templates, setTemplates] = useState<TaskTemplateItem[]>([]);
@@ -301,7 +301,7 @@ export const ParentDashboard: React.FC = () => {
       return;
     }
 
-    setEvidenceViewer({ submission, asset: null, mediaUrl: '' });
+    setEvidenceViewer({ submission, asset: null, mediaUrl: '', images: [], selectedIndex: 0 });
     setEvidenceViewerLoading(true);
     setEvidenceViewerError(null);
 
@@ -323,6 +323,9 @@ export const ParentDashboard: React.FC = () => {
 
       if (!asset) throw new Error('לא נמצא קובץ תיעוד זמין לצפייה');
       const mediaUrl = `/api/parent/evidence/${submission.id}/media/${asset.id}`;
+      const images = (mediaKind === 'image' || mediaKind === 'screenshot')
+        ? activeAssets.filter((item: any) => ['normalized', 'original'].includes(item.kind) && String(item.mime_type || '').startsWith('image/'))
+        : [];
       const latestSuccessfulAttempt = (detail.verificationAttempts || []).find((attempt: any) => attempt?.status === 'success');
       setEvidenceViewer({
         submission: {
@@ -332,6 +335,8 @@ export const ParentDashboard: React.FC = () => {
         },
         asset,
         mediaUrl,
+        images,
+        selectedIndex: 0,
       });
     } catch (err: any) {
       setEvidenceViewerError(err?.message || 'לא ניתן לטעון את התיעוד');
@@ -1624,11 +1629,34 @@ export const ParentDashboard: React.FC = () => {
                       <AuthenticatedEvidenceAudio src={evidenceViewer.mediaUrl} autoLoad />
                     </div>
                   ) : (
-                    <img
-                      src={evidenceViewer.mediaUrl}
-                      alt="תיעוד מצורף למשימה"
-                      className="max-h-[65vh] mx-auto max-w-full rounded-2xl object-contain"
-                    />
+                    <div className="space-y-3">
+                      <img
+                        src={evidenceViewer.mediaUrl}
+                        alt={`תמונה ${evidenceViewer.selectedIndex + 1} מתוך ${Math.max(1, evidenceViewer.images.length)}`}
+                        className="max-h-[56vh] mx-auto max-w-full rounded-2xl object-contain"
+                      />
+                      {evidenceViewer.images.length > 1 && (
+                        <div className="space-y-2">
+                          <p className="text-center text-xs font-semibold text-cyan-200">
+                            תמונה {evidenceViewer.selectedIndex + 1} מתוך {evidenceViewer.images.length}
+                          </p>
+                          <div className="flex flex-wrap justify-center gap-2" dir="rtl">
+                            {evidenceViewer.images.map((item: any, i: number) => (
+                              <button
+                                type="button"
+                                key={item.id}
+                                aria-label={`הצג תמונה ${i + 1} מתוך ${evidenceViewer.images.length}`}
+                                aria-pressed={i === evidenceViewer.selectedIndex}
+                                onClick={() => setEvidenceViewer((current) => current && current.images[i]
+                                  ? { ...current, asset: current.images[i], selectedIndex: i, mediaUrl: `/api/parent/evidence/${current.submission.id}/media/${current.images[i].id}` }
+                                  : current)}
+                                className={`rounded-lg border px-3 py-2 text-xs font-bold ${i === evidenceViewer.selectedIndex ? 'border-cyan-400 bg-cyan-900/60 text-white' : 'border-purple-600/40 bg-night-950/70 text-purple-200'}`}
+                              >{i + 1}</button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                   {evidenceViewer.submission?.media_kind !== 'audio' && evidenceViewer.submission?.review_mode !== 'automatic' && (
                     <div className="rounded-2xl border border-violet-500/30 bg-violet-950/35 p-3 text-right">
