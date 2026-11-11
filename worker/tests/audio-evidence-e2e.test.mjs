@@ -144,6 +144,48 @@ test('end to end: audio upload, rejection checks, protected parent playback and 
     assert.equal(reviewed.submission.verification_status, 'verified');
     const again = await request(mediaPath, { token: parentToken });
     assert.equal(again.status, 200, 'Playback still works after approval');
+    // A second activity uses ten distinct images in one submission.
+    const batch = await responseJson(await request('/api/child/evidence/start', {
+      token: childToken, method: 'POST',
+      data: { taskInstanceId: 'audio_qa_math', mediaKind: 'screenshot', mediaSource: 'gallery_upload' },
+    }), 200);
+    const batchId = encodeURIComponent(batch.submissionId);
+    const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLgtAAAAABJRU5ErkJggg==', 'base64');
+    for (let i = 0; i < 10; i++) {
+      // Trailing metadata distinguishes uploaded files; the PNG itself remains valid.
+      const png = Buffer.concat([tinyPng, Buffer.from([i])]);
+      const saved = await responseJson(await request('/api/child/evidence/' + batchId + '/asset/normalized', {
+        token: childToken, method: 'PUT', data: png, contentType: 'image/png',
+      }), 200);
+      assert.equal(saved.asset.byteSize, png.length);
+    }
+    await responseJson(await request('/api/child/evidence/' + batchId + '/asset/normalized', {
+      token: childToken, method: 'PUT', data: Buffer.concat([tinyPng, Buffer.from([99])]),
+      contentType: 'image/png',
+    }), 409);
+
+    const finished = await responseJson(await request('/api/child/evidence/' + batchId + '/complete', {
+      token: childToken, method: 'POST', data: {},
+    }), 200);
+    assert.equal(finished.status, 'needs_parent_review');
+    const allImages = await responseJson(await request('/api/parent/evidence/' + batchId, {
+      token: parentToken,
+    }), 200);
+    assert.equal(allImages.assets.filter(a => a.kind === 'normalized' && !a.deleted_at).length, 10);
+    for (const asset of allImages.assets) {
+      const file = await request('/api/parent/evidence/' + batchId + '/media/' + encodeURIComponent(asset.id), { token: parentToken });
+      assert.equal(file.status, 200, 'Parent can view every stored photo');
+      assert.match(file.headers.get('content-type') || '', /image\/png/);
+    }
+    const approvedBatch = await responseJson(await request('/api/parent/evidence/' + batchId + '/approve', {
+      token: parentToken, method: 'POST', data: {},
+    }), 200);
+    assert.equal(approvedBatch.minutesAwarded, 3, 'One activity awards exactly three minutes, not one per photo');
+    const repeat = await request('/api/parent/evidence/' + batchId + '/approve', {
+      token: parentToken, method: 'POST', data: {},
+    });
+    assert.ok(repeat.status >= 400, 'Duplicate approval must not grant more minutes');
+
   } finally {
     // Wrangler may spawn workerd; terminate the entire dedicated process group.
     try { process.kill(-server.pid, 'SIGTERM'); } catch { server.kill('SIGTERM'); }
