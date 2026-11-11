@@ -433,7 +433,7 @@ async function completeEvidenceSubmission(
 
   const duplicateDetected = assets.some((asset: any) => Boolean(asset.duplicate_of_asset_id));
   // AI evaluates only four images; larger batches must be reviewed manually.
-  const aiEligible = submission.media_kind !== 'audio' && (!isPhotoSubmission || imageCount <= 4) && submission.verification_mode === 'ai_media' && String(env.AI_EVIDENCE_ENABLED || 'true') === 'true';
+  const aiEligible = submission.media_kind !== 'audio' && submission.verification_mode === 'ai_media' && (!isPhotoSubmission || imageCount <= 4) && String(env.AI_EVIDENCE_ENABLED || 'true') === 'true';
   const nextStatus = duplicateDetected ? 'needs_parent_review' : aiEligible ? 'pending_ai' : 'needs_parent_review';
   const summary = duplicateDetected
     ? 'זוהתה ראיה זהה לראיה קודמת; נדרשת בדיקת הורה.'
