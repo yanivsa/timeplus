@@ -342,7 +342,7 @@ async function uploadEvidenceAsset(
           WHERE (? = 0 OR (
             SELECT COUNT(*) FROM submission_evidence_assets
             WHERE submission_id = ? AND deleted_at IS NULL AND kind IN ('normalized', 'original')
-          ) < ?)
+          ) < ?)`
       )
       .bind(
         assetId,
