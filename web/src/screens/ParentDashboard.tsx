@@ -1632,7 +1632,7 @@ export const ParentDashboard: React.FC = () => {
                     <div className="space-y-3">
                       <img
                         src={evidenceViewer.mediaUrl}
-                        alt={`תמונה ${evidenceViewer.selectedIndex + 1} מתוך ${Math.max(1, evidenceViewer.images.length)}`}
+                        alt="תיעוד מצורף למשימה"
                         className="max-h-[56vh] mx-auto max-w-full rounded-2xl object-contain"
                       />
                       {evidenceViewer.images.length > 1 && (
