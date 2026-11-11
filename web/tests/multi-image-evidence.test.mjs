@@ -49,3 +49,13 @@ test('existing Android WebView handles chooser ClipData for multi-file selection
   assert.match(android, /val clipData = result\.data\?\.clipData/);
   assert.match(android, /Array\(clipData\.itemCount\)/);
 });
+
+test('normal parent approvals preview allows navigating all ten images without changing submission', () => {
+  const parent = read('web/src/screens/ParentDashboard.tsx');
+  assert.match(parent, /images: any\[\]/);
+  assert.match(parent, /selectedIndex: number/);
+  assert.match(parent, /activeAssets\.filter\(\(item: any\) => \['normalized', 'original'\]/);
+  assert.match(parent, /evidenceViewer\.images\.map/);
+  assert.match(parent, /setEvidenceViewer\(\(current\)/);
+  assert.match(parent, /aria-pressed=\{i === evidenceViewer\.selectedIndex\}/);
+});
