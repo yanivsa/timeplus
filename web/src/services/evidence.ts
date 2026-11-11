@@ -10,7 +10,34 @@ async function waitMeta(v:HTMLVideoElement){if(v.readyState>=1&&Number.isFinite(
 async function seek(v:HTMLVideoElement,time:number){if(Math.abs(v.currentTime-time)<.03&&v.readyState>=2)return;await new Promise<void>((res,rej)=>{const t=setTimeout(()=>rej(new Error('לא ניתן לדגום את הווידאו')),8000);v.addEventListener('seeked',()=>{clearTimeout(t);res()},{once:true});try{v.currentTime=Math.max(0,Math.min(time,Math.max(0,v.duration-.02)))}catch(e){clearTimeout(t);rej(e)}});}
 export async function extractVideoEvidence(file:File):Promise<{contactSheet:Blob;keyframes:Blob[];duration:number}>{ if(!file.type.startsWith('video/'))throw new Error('יש לבחור קובץ וידאו תקין'); if(file.size>25*1024*1024)throw new Error('הווידאו גדול מ-25MB'); const u=URL.createObjectURL(file),v=document.createElement('video');v.preload='metadata';v.muted=true;v.playsInline=true;v.src=u;try{await waitMeta(v);const duration=Number(v.duration);if(!Number.isFinite(duration)||duration<=0)throw new Error('לא ניתן לקרוא את משך הווידאו');if(duration>30.25)throw new Error('אפשר לשלוח וידאו באורך של עד 30 שניות');const sw=v.videoWidth||1280,sh=v.videoHeight||720,cw=400,ch=Math.max(220,Math.round(cw*sh/sw)),sheet=document.createElement('canvas');sheet.width=cw*2;sheet.height=ch*4;const ctx=sheet.getContext('2d',{alpha:false});if(!ctx)throw new Error('לא ניתן לעבד את הווידאו');const times=Array.from({length:8},(_,i)=>duration<=.2?0:duration*i/7),keys=new Set([0,3,7]),frames:Blob[]=[];for(let i=0;i<8;i++){await seek(v,times[i]);const col=i%2,row=Math.floor(i/2);ctx.drawImage(v,col*cw,row*ch,cw,ch);ctx.fillStyle='rgba(0,0,0,.65)';ctx.fillRect(col*cw+6,row*ch+ch-32,92,26);ctx.fillStyle='#fff';ctx.font='16px sans-serif';ctx.fillText(`${times[i].toFixed(1)}s`,col*cw+12,row*ch+ch-13);if(keys.has(i)){const f=document.createElement('canvas'),scale=Math.min(1,1280/sw);f.width=Math.max(1,Math.round(sw*scale));f.height=Math.max(1,Math.round(sh*scale));f.getContext('2d',{alpha:false})?.drawImage(v,0,0,f.width,f.height);frames.push(await canvasToBlob(f,.84));}}return{contactSheet:await canvasToBlob(sheet,.82),keyframes:frames,duration};}finally{URL.revokeObjectURL(u);v.removeAttribute('src');v.load();}}
 async function complete(id:string){return apiRequest<EvidenceSubmissionResult>(`/api/child/evidence/${id}/complete`,{method:'POST',body:JSON.stringify({})});}
-export async function submitImageEvidence(p:{taskInstanceId:string;file:File;mediaSource:EvidenceMediaSource;note?:string}){const normalized=await normalizeEvidenceImage(p.file),clientSha256=await sha256Blob(normalized),mediaKind:EvidenceMediaKind=p.mediaSource==='gallery_upload'?'screenshot':'image';const st=await apiRequest<{submissionId:string}>('/api/child/evidence/start',{method:'POST',body:JSON.stringify({taskInstanceId:p.taskInstanceId,mediaKind,mediaSource:p.mediaSource,note:p.note||null,clientSha256})});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/normalized`,normalized,{contentType:normalized.type});return{...(await complete(st.submissionId)),clientSha256};}
+export const MAX_EVIDENCE_IMAGES = 10;
+export interface EvidenceImageFile { file: File; mediaSource: EvidenceMediaSource; }
+export async function submitImagesEvidence(p: { taskInstanceId: string; files: EvidenceImageFile[]; note?: string }): Promise<EvidenceSubmissionResult> {
+  if (!p.files.length || p.files.length > MAX_EVIDENCE_IMAGES) {
+    throw new Error('אפשר לצרף בין תמונה אחת לעשר תמונות לפעילות');
+  }
+  for (const { file } of p.files) {
+    if (!file.type.startsWith('image/')) throw new Error('יש לבחור תמונות בלבד');
+  }
+  // A camera image must not be classified as a trusted screenshot for AI auto-approval.
+  const allGallery = p.files.every(({ mediaSource }) => mediaSource === 'gallery_upload');
+  const mediaKind: EvidenceMediaKind = allGallery ? 'screenshot' : 'image';
+  const mediaSource: EvidenceMediaSource = allGallery ? 'gallery_upload' : 'camera_capture';
+  const start = await apiRequest<{ submissionId: string }>('/api/child/evidence/start', {
+    method: 'POST',
+    body: JSON.stringify({ taskInstanceId: p.taskInstanceId, mediaKind, mediaSource, note: p.note || null }),
+  });
+  // Upload sequentially to avoid browser memory spikes and preserve a single submission.
+  // Complete exactly once, only after all images have been accepted by the server.
+  for (const { file } of p.files) {
+    const normalized = await normalizeEvidenceImage(file);
+    await apiUpload(`/api/child/evidence/${start.submissionId}/asset/normalized`, normalized, { contentType: normalized.type });
+  }
+  return complete(start.submissionId);
+}
+export async function submitImageEvidence(p:{taskInstanceId:string;file:File;mediaSource:EvidenceMediaSource;note?:string}) {
+  return submitImagesEvidence({ taskInstanceId:p.taskInstanceId, files:[{file:p.file,mediaSource:p.mediaSource}], note:p.note });
+}
 export async function submitVideoEvidence(p:{taskInstanceId:string;file:File;mediaSource:EvidenceMediaSource;note?:string}){if(p.file.size>25*1024*1024)throw new Error('הווידאו גדול מ-25MB');const ex=await extractVideoEvidence(p.file);const st=await apiRequest<{submissionId:string}>('/api/child/evidence/start',{method:'POST',body:JSON.stringify({taskInstanceId:p.taskInstanceId,mediaKind:'video',mediaSource:p.mediaSource,note:p.note||null})});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/original`,p.file,{contentType:p.file.type||'video/mp4'});await apiUpload(`/api/child/evidence/${st.submissionId}/asset/contact_sheet`,ex.contactSheet,{contentType:ex.contactSheet.type});for(const f of ex.keyframes)await apiUpload(`/api/child/evidence/${st.submissionId}/asset/keyframe`,f,{contentType:f.type});return{...(await complete(st.submissionId)),duration:ex.duration};}
 
 
