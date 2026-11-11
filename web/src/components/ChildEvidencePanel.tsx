@@ -4,7 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { apiRequest } from '../services/api';
 import {
   EvidenceMediaSource,
-  submitImageEvidence,
+  MAX_EVIDENCE_IMAGES,
+  EvidenceImageFile,
+  submitImagesEvidence,
   submitVideoEvidence,
 } from '../services/evidence';
 import { TaskItem } from '../types';
@@ -22,6 +24,8 @@ export const ChildEvidencePanel: React.FC = () => {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [queuedImages, setQueuedImages] = useState<EvidenceImageFile[]>([]);
+  const imagesSubmitting = useRef(false);
 
   const cam = useRef<HTMLInputElement>(null);
   const gal = useRef<HTMLInputElement>(null);
@@ -92,27 +96,45 @@ export const ChildEvidencePanel: React.FC = () => {
       ? 'התיעוד אומת.'
       : 'התיעוד נשמר ונשלח לבדיקה.';
 
-  const image = async (f: File | undefined, source: EvidenceMediaSource) => {
-    if (!f || !selectedTaskId || busy) return;
+  // Picking a file only queues it. The child can add more from camera or gallery
+  // and then explicitly send one submission containing all images.
+  const queueImages = (chosen: FileList | null, source: EvidenceMediaSource) => {
+    if (busy || !chosen?.length) return;
+    const picked = Array.from(chosen);
+    if (picked.some((file) => !file.type.startsWith('image/'))) {
+      setMessage('אפשר לצרף תמונות בלבד.');
+      return;
+    }
+    if (queuedImages.length + picked.length > MAX_EVIDENCE_IMAGES) {
+      setMessage(`ניתן לצרף עד ${MAX_EVIDENCE_IMAGES} תמונות לפעילות. בחר פחות תמונות.`);
+      return;
+    }
+    setQueuedImages((previous) => [...previous, ...picked.map((file) => ({ file, mediaSource: source }))]);
+    setMessage(null);
+  };
+
+  const submitImages = async () => {
+    if (!selectedTaskId || !queuedImages.length || busy || imagesSubmitting.current) return;
+    imagesSubmitting.current = true;
     const submittedTemplateId = selected?.template_id || null;
     setBusy(true);
     setMessage(null);
     try {
-      const r = await submitImageEvidence({
+      const result = await submitImagesEvidence({
         taskInstanceId: selectedTaskId,
-        file: f,
-        mediaSource: source,
+        files: queuedImages,
         note: note.trim() || undefined,
       });
-      setMessage(msg(r));
+      setQueuedImages([]);
       setNote('');
+      setMessage(msg(result));
       await refreshAfterSubmission(submittedTemplateId);
     } catch (e: any) {
-      setMessage(e?.message || 'לא ניתן היה לשלוח את התיעוד');
+      // Preserve the queue for retry; don't lose the photos if an upload fails.
+      setMessage(e?.message || 'לא ניתן היה לשלוח את התמונות. ניתן לנסות שוב.');
     } finally {
+      imagesSubmitting.current = false;
       setBusy(false);
-      if (cam.current) cam.current.value = '';
-      if (gal.current) gal.current.value = '';
     }
   };
 
@@ -167,7 +189,7 @@ export const ChildEvidencePanel: React.FC = () => {
                   עבור איזו משימה?
                   <select
                     value={selectedTaskId}
-                    onChange={(e) => setSelectedTaskId(e.target.value)}
+                    onChange={(e) => { setSelectedTaskId(e.target.value); setQueuedImages([]); setMessage(null); }}
                     disabled={busy}
                     className="mt-1.5 w-full rounded-xl bg-night-950 border border-purple-500/30 p-3 text-sm text-white"
                   >
@@ -220,7 +242,7 @@ export const ChildEvidencePanel: React.FC = () => {
                     className="rounded-xl bg-purple-600/80 text-white py-3 px-2 font-bold text-xs flex items-center justify-center gap-2"
                   >
                     <ImagePlus className="h-4 w-4" />
-                    גלריה / צילום מסך
+                    בחר תמונות / צילומי מסך
                   </button>
                   {videoAllowed && (
                     <>
@@ -244,6 +266,37 @@ export const ChildEvidencePanel: React.FC = () => {
                   )}
                 </div>
 
+                <p className="text-[11px] text-purple-300">
+                  אפשר לבחור עד {MAX_EVIDENCE_IMAGES} תמונות מהמחשב או מהטלפון, ולצלם כמה פעמים. התמונות אינן נשלחות עד ללחיצה על שליחה.
+                </p>
+                {queuedImages.length > 0 && (
+                  <div className="rounded-xl bg-night-950/80 border border-cyan-500/20 p-3 space-y-2">
+                    <p className="text-xs font-bold text-cyan-200">תמונות שנבחרו: {queuedImages.length}/{MAX_EVIDENCE_IMAGES}</p>
+                    <ul className="space-y-1 max-h-36 overflow-y-auto">
+                      {queuedImages.map(({ file }, index) => (
+                        <li key={index} className="flex items-center justify-between gap-2 text-xs text-purple-200">
+                          <span className="truncate">{index + 1}. {file.name || 'צילום חדש'}</span>
+                          <button
+                            type="button"
+                            aria-label={`הסר תמונה ${index + 1}`}
+                            disabled={busy}
+                            onClick={() => setQueuedImages((current) => current.filter((_, i) => i !== index))}
+                            className="text-red-300 p-1 shrink-0"
+                          ><X className="w-4 h-4" /></button>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={submitImages}
+                      className="w-full rounded-xl bg-gold-500 text-night-950 py-3 font-bold text-sm disabled:opacity-50"
+                    >
+                      {busy ? 'שולח תמונות...' : `שלח ${queuedImages.length} תמונות לאישור`}
+                    </button>
+                  </div>
+                )}
+
                 {videoAllowed && (
                   <p className="text-[11px] text-purple-400">
                     וידאו: עד 30 שניות ועד 25MB. ל-AI נשלחים פריימים בלבד; הווידאו נשמר כראיה פרטית.
@@ -256,14 +309,15 @@ export const ChildEvidencePanel: React.FC = () => {
                   accept="image/*"
                   capture="environment"
                   className="hidden"
-                  onChange={(e) => image(e.target.files?.[0], 'camera_capture')}
+                  onChange={(e) => { queueImages(e.target.files, 'camera_capture'); e.target.value = ''; }}
                 />
                 <input
                   ref={gal}
                   type="file"
                   accept="image/*"
+                  multiple
                   className="hidden"
-                  onChange={(e) => image(e.target.files?.[0], 'gallery_upload')}
+                  onChange={(e) => { queueImages(e.target.files, 'gallery_upload'); e.target.value = ''; }}
                 />
                 <input
                   ref={vcam}
