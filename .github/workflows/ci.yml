@@ -31,7 +31,7 @@ jobs:
         run: node --test worker/tests/production-hardening.test.mjs worker/tests/task-approval-atomicity.test.mjs worker/tests/auth-setup-hardening.test.mjs worker/tests/task-consistency-hardening.test.mjs worker/tests/wallet-consistency-hardening.test.mjs worker/tests/task-visibility-archive.test.mjs worker/tests/repeatable-evidence-refresh.test.mjs
 
       - name: Test English reading audio recording and review contracts
-        run: node --test web/tests/english-reading-audio.test.mjs
+        run: node --test web/tests/english-reading-audio.test.mjs web/tests/multi-image-evidence.test.mjs
 
       - name: Test approval metadata UI contract
         run: node --test web/tests/approval-metadata.test.mjs
