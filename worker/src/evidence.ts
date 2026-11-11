@@ -10,6 +10,7 @@ export type EvidenceMediaSource = 'camera_capture' | 'gallery_upload' | 'microph
 export type EvidenceAssetKind = 'original' | 'normalized' | 'contact_sheet' | 'keyframe';
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_IMAGES_PER_SUBMISSION = 10;
 const MAX_VIDEO_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
 
@@ -279,6 +280,9 @@ async function uploadEvidenceAsset(
   }
   if (submission.media_kind !== 'audio' && isAudio) return errorJson('המשימה אינה מצפה לקובץ שמע', 415);
   if (submission.media_kind !== 'video' && isVideo) return errorJson('המשימה מצפה לתמונה ולא לווידאו', 415);
+  const isPhotoSubmission = submission.media_kind === 'image' || submission.media_kind === 'screenshot';
+  if (isPhotoSubmission && !isImage) return errorJson('אפשר לצרף תמונות בלבד', 415);
+  if (isPhotoSubmission && !['normalized', 'original'].includes(assetKind)) return errorJson('סוג קובץ התמונה אינו תקין', 415);
   if (submission.media_kind === 'video' && assetKind === 'original' && !isVideo) {
     return errorJson('קובץ הווידאו המקורי אינו בפורמט נתמך', 415);
   }
@@ -293,6 +297,12 @@ async function uploadEvidenceAsset(
   if (!looksLikeDeclaredMime(bytes, contentType)) return errorJson('תוכן הקובץ אינו תואם לסוג שדווח', 415);
 
   const hash = await sha256Hex(body);
+  if (isPhotoSubmission) {
+    const existing = await env.DB.prepare(
+      `SELECT id FROM submission_evidence_assets WHERE submission_id = ? AND sha256 = ? AND deleted_at IS NULL LIMIT 1`
+    ).bind(submissionId, hash).first();
+    if (existing) return errorJson('התמונה הזו כבר נוספה לפעילות', 409);
+  }
   const duplicate = await env.DB
     .prepare(
       `SELECT sea.id
@@ -323,12 +333,16 @@ async function uploadEvidenceAsset(
   });
 
   try {
-    await env.DB
+    const assetInserted = await env.DB
       .prepare(
         `INSERT INTO submission_evidence_assets (
           id, submission_id, kind, object_key, mime_type, byte_size, sha256,
           duplicate_of_asset_id, created_at, expires_at, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+        ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL
+          WHERE (? = 0 OR (
+            SELECT COUNT(*) FROM submission_evidence_assets
+            WHERE submission_id = ? AND deleted_at IS NULL AND kind IN ('normalized', 'original')
+          ) < ?)
       )
       .bind(
         assetId,
@@ -340,9 +354,16 @@ async function uploadEvidenceAsset(
         hash,
         duplicate?.id || null,
         now,
-        expiresAt
+        expiresAt,
+        isPhotoSubmission ? 1 : 0,
+        submissionId,
+        MAX_IMAGES_PER_SUBMISSION
       )
       .run();
+    if (isPhotoSubmission && Number((assetInserted as any)?.meta?.changes || 0) === 0) {
+      await deleteEvidenceObject(env, objectKey).catch(() => undefined);
+      return errorJson('אפשר להעלות לכל היותר 10 תמונות לפעילות אחת', 409);
+    }
 
     const priorAfterInsert = await env.DB.prepare(
       `SELECT sea.id FROM submission_evidence_assets sea
@@ -406,9 +427,13 @@ async function completeEvidenceSubmission(
     ? assets.some((asset: any) => asset.kind === 'original')
     : assets.some((asset: any) => asset.kind === 'normalized' || asset.kind === 'original');
   if (!hasRequiredEvidence) return errorJson('לא הועלתה ראיה תקינה', 400);
+  const isPhotoSubmission = submission.media_kind === 'image' || submission.media_kind === 'screenshot';
+  const imageCount = assets.filter((asset: any) => ['normalized', 'original'].includes(asset.kind)).length;
+  if (isPhotoSubmission && imageCount > MAX_IMAGES_PER_SUBMISSION) return errorJson('יותר מדי תמונות בהגשה', 400);
 
   const duplicateDetected = assets.some((asset: any) => Boolean(asset.duplicate_of_asset_id));
-  const aiEligible = submission.media_kind !== 'audio' && submission.verification_mode === 'ai_media' && String(env.AI_EVIDENCE_ENABLED || 'true') === 'true';
+  // AI evaluates only four images; larger batches must be reviewed manually.
+  const aiEligible = submission.media_kind !== 'audio' && (!isPhotoSubmission || imageCount <= 4) && submission.verification_mode === 'ai_media' && String(env.AI_EVIDENCE_ENABLED || 'true') === 'true';
   const nextStatus = duplicateDetected ? 'needs_parent_review' : aiEligible ? 'pending_ai' : 'needs_parent_review';
   const summary = duplicateDetected
     ? 'זוהתה ראיה זהה לראיה קודמת; נדרשת בדיקת הורה.'
