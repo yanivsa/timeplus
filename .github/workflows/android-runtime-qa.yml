@@ -44,8 +44,18 @@ jobs:
           disable-animations: true
           script: bash android/runtime-qa.sh
 
+      - name: Trim large emulator log before artifact upload
+        if: always()
+        run: |
+          if [ -f runtime-logcat.txt ]; then
+            tail -c 1048576 runtime-logcat.txt > runtime-logcat.trimmed
+            mv runtime-logcat.trimmed runtime-logcat.txt
+          fi
+
       - name: Upload runtime QA evidence
         if: always()
+        timeout-minutes: 3
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: android-runtime-qa
