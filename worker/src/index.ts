@@ -42,6 +42,7 @@ import {
   pauseScreenSession,
   resumeScreenSession,
   stopScreenSession,
+  stopParentScreenSession,
   finalizeExpiredScreenSessions,
 } from './screen-sessions';
 import { renderPrivacyPolicyHtml } from './privacy';
@@ -715,6 +716,29 @@ export default {
           totalPendingRequests: totalPendingRequests?.count || 0,
           activeScreenSessions,
         });
+      }
+
+      // The parent may terminate a running or paused session in their own family.
+      const parentStopTimerMatch = pathname.match(/^\/api\/parent\/screen-sessions\/([^/]+)\/stop$/);
+      if (parentStopTimerMatch && method === 'POST') {
+        const sessionId = parentStopTimerMatch[1];
+        const result = await stopParentScreenSession(env.DB, user.familyId, sessionId);
+        if (!result.success) return errorJson(result.error || 'לא ניתן לעצור את הטיימר', 409);
+
+        // Best-effort audit: a successful stop must not be rolled back by logging errors.
+        ctx.waitUntil(
+          env.DB.prepare(
+            `INSERT INTO audit_log
+              (id,family_id,actor_type,actor_id,action,entity_type,entity_id,metadata_json,created_at)
+             VALUES (?,?,'parent',?,'parent_screen_session_stopped','screen_session',?,?,?)`
+          ).bind(
+            generateId(), user.familyId, user.id, sessionId,
+            JSON.stringify({ childId: result.childId, mode: result.mode, spentMinutes: result.spentMinutes }),
+            new Date().toISOString()
+          ).run().then(() => undefined).catch((err) => console.error('Failed to audit parent timer stop', err))
+        );
+
+        return json(result);
       }
 
       if (pathname === '/api/parent/approvals' && method === 'GET') {
