@@ -733,7 +733,7 @@ export default {
              VALUES (?,?,'parent',?,'parent_screen_session_stopped','screen_session',?,?,?)`
           ).bind(
             generateId(), user.familyId, user.id, sessionId,
-            JSON.stringify({ childId: result.childId, mode: result.mode, spentMinutes: result.spentMinutes }),
+            JSON.stringify({ action: 'parent_stop' }),
             new Date().toISOString()
           ).run().then(() => undefined).catch((err) => console.error('Failed to audit parent timer stop', err))
         );
