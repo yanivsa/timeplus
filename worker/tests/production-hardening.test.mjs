@@ -138,3 +138,29 @@ test('evidence decisions dispatch push without duplicating in-app notification r
 test('Android runtime QA runs automatically on pushes to main', () => {
   assert.match(source.runtimeQa, /push:[\s\S]*branches:[\s\S]*- main/);
 });
+
+
+test('parent timer stop is role-restricted and targets an active session in the same family', () => {
+  const parentGate = source.index.indexOf("if (user.role !== 'parent')");
+  const route = source.index.indexOf('const parentStopTimerMatch');
+  assert.ok(parentGate >= 0 && route > parentGate, 'parent stop must be after the parent authorization guard');
+  const routeBlock = between(source.index, 'const parentStopTimerMatch', "if (pathname === '/api/parent/approvals'");
+  assert.match(routeBlock, /method === 'POST'/);
+  assert.match(routeBlock, /stopParentScreenSession\(env\.DB, user\.familyId, sessionId\)/);
+  assert.match(routeBlock, /parent_screen_session_stopped/);
+
+  const parentStop = source.sessions.slice(source.sessions.indexOf('export async function stopParentScreenSession'));
+  assert.match(parentStop, /WHERE id=\? AND family_id=\? AND status IN \('running','paused'\)/);
+  assert.match(parentStop, /stopScreenSession\(db, familyId, session\.child_id, sessionId\)/);
+});
+
+test('parent stopping cannot target the next timer, double-charge, or refund approved minutes', () => {
+  const stop = between(source.sessions, 'export async function stopScreenSession', '/** Parent can stop only the exact active timer');
+  assert.match(stop, /AND \(\? IS NULL OR s\.id=\?\)/);
+  assert.match(stop, /WHERE id=\? AND family_id=\? AND child_id=\? AND status IN/);
+  assert.match(stop, /meta\?\.changes/);
+  assert.match(stop, /recordSelfUsage\(db, row, remaining\)/);
+  const charge = between(source.sessions, 'async function recordSelfUsage', 'async function claimAndFinishExpiredSession');
+  assert.match(charge, /row\.mode \|\| 'approved'/);
+  assert.match(charge, /!== 'self'/);
+});
