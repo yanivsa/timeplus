@@ -498,15 +498,16 @@ export async function resumeScreenSession(db: D1Database, familyId: string, chil
   return { success: true };
 }
 
-export async function stopScreenSession(db: D1Database, familyId: string, childId: string) {
+export async function stopScreenSession(db: D1Database, familyId: string, childId: string, sessionId?: string) {
   const row = await db.prepare(
     `SELECT s.*,
        CASE WHEN r.reviewed_by=? THEN 'self' ELSE 'approved' END AS mode
      FROM screen_sessions s
      LEFT JOIN screen_time_requests r ON r.id=s.screen_time_request_id
      WHERE s.family_id=? AND s.child_id=? AND s.status IN ('running','paused')
+       AND (? IS NULL OR s.id=?)
      ORDER BY s.created_at DESC LIMIT 1`
-  ).bind(SELF_REVIEW_MARKER, familyId, childId).first<SessionRow>();
+  ).bind(SELF_REVIEW_MARKER, familyId, childId, sessionId || null, sessionId || null).first<SessionRow>();
   if (!row) return { success: false, error: 'אין טיימר פעיל' };
 
   const remaining = remainingNow(row);
@@ -517,8 +518,8 @@ export async function stopScreenSession(db: D1Database, familyId: string, childI
   const stopped = await db.prepare(
     `UPDATE screen_sessions
      SET status='stopped', remaining_seconds=?, ended_at=?, updated_at=?
-     WHERE id=? AND status IN ('running','paused')`
-  ).bind(remaining, now, now, row.id).run();
+     WHERE id=? AND family_id=? AND child_id=? AND status IN ('running','paused')`
+  ).bind(remaining, now, now, row.id, familyId, childId).run();
 
   if (Number((stopped as any)?.meta?.changes || 0) <= 0) {
     return { success: false, error: 'הטיימר כבר הסתיים או השתנה' };
@@ -549,4 +550,17 @@ export async function stopScreenSession(db: D1Database, familyId: string, childI
     ).run();
     throw err;
   }
+}
+
+/** Parent can stop only the exact active timer that belongs to their family. */
+export async function stopParentScreenSession(db: D1Database, familyId: string, sessionId: string) {
+  if (!sessionId) return { success: false, error: 'חסר מזהה טיימר' };
+  const session = await db.prepare(
+    `SELECT child_id FROM screen_sessions
+     WHERE id=? AND family_id=? AND status IN ('running','paused')`
+  ).bind(sessionId, familyId).first<{ child_id: string }>();
+  if (!session) return { success: false, error: 'הטיימר אינו פעיל או אינו שייך למשפחה' };
+
+  const result = await stopScreenSession(db, familyId, session.child_id, sessionId);
+  return { ...result, childId: session.child_id };
 }
