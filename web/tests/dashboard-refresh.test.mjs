@@ -125,3 +125,22 @@ test('parent minute adjustment blocks repeat taps and requires a reason when ded
   assert.match(parent, /disabled=\{adjustingMinutes\}/);
   assert.match(parent, /required=\{adjustMinutesDelta < 0\}/);
 });
+
+
+test('parent has an explicit stop control for every active timer', () => {
+  assert.match(parent, /activeScreenSessions\.map/);
+  assert.match(parent, /handleStopScreenSession\(session\)/);
+  assert.match(parent, /עצור טיימר/);
+  assert.match(parent, /window\.confirm\(confirmation\)/);
+  assert.match(parent, /stoppingScreenSessionRef\.current/);
+  assert.match(parent, /\/api\/parent\/screen-sessions\/\$\{encodeURIComponent\(session\.id\)\}\/stop/);
+  assert.match(parent, /result\.mode === 'self'/);
+});
+
+test('child syncs a live timer after a remote parent stop without full dashboard polling', () => {
+  assert.match(child, /const refreshActiveTimer = async/);
+  assert.match(child, /apiRequest\('\/api\/child\/screen-session'\)/);
+  assert.match(child, /setInterval\(refreshActiveTimer, 8000\)/);
+  assert.match(child, /if \(!latest\.activeSession\) setStatusMessage/);
+  assert.match(child, /document\.visibilityState !== 'visible'/);
+});

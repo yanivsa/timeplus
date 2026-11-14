@@ -107,6 +107,8 @@ export const ParentDashboard: React.FC = () => {
   // Data
   const [children, setChildren] = useState<ChildSummary[]>([]);
   const [activeScreenSessions, setActiveScreenSessions] = useState<any[]>([]);
+  const [stoppingScreenSessionId, setStoppingScreenSessionId] = useState<string | null>(null);
+  const stoppingScreenSessionRef = useRef(false);
   const [pendingTasks, setPendingTasks] = useState<PendingApprovalItem[]>([]);
   const [pendingRequests, setPendingRequests] = useState<ScreenTimeRequestItem[]>([]);
   const [evidenceTaskIds, setEvidenceTaskIds] = useState<Set<string>>(new Set());
@@ -386,6 +388,39 @@ export const ParentDashboard: React.FC = () => {
       await loadDashboard();
     } catch (err: any) {
       setStatusMessage({ text: err.message || 'שגיאה בטיפול בבקשה', type: 'error' });
+    }
+  };
+
+  const handleStopScreenSession = async (session: any) => {
+    if (stoppingScreenSessionRef.current) return;
+    const isSelfUsage = session.mode === 'self';
+    const confirmation = isSelfUsage
+      ? `לעצור את הטיימר של ${session.child_name}? ינוכו רק הדקות שנוצלו בפועל (דקה שהתחילה תחויב).`
+      : `לעצור את הטיימר של ${session.child_name}? הדקות כבר נוכו בעת אישור הבקשה והיתרה לא תוחזר אוטומטית.`;
+    if (!window.confirm(confirmation)) return;
+
+    stoppingScreenSessionRef.current = true;
+    setStoppingScreenSessionId(session.id);
+    setStatusMessage(null);
+    try {
+      const result = await apiRequest(`/api/parent/screen-sessions/${encodeURIComponent(session.id)}/stop`, {
+        method: 'POST',
+      });
+      setActiveScreenSessions((current) => current.filter((item) => item.id !== session.id));
+      audio.playTap();
+      setStatusMessage({
+        type: 'success',
+        text: result.mode === 'self'
+          ? `הטיימר של ${session.child_name} נעצר. נוכו ${result.spentMinutes || 0} דקות ניצול.`
+          : `הטיימר של ${session.child_name} נעצר. לא בוצע חיוב נוסף או החזר אוטומטי.`,
+      });
+      await loadDashboard();
+    } catch (err: any) {
+      audio.playReject();
+      setStatusMessage({ text: err.message || 'עצירת הטיימר נכשלה', type: 'error' });
+    } finally {
+      stoppingScreenSessionRef.current = false;
+      setStoppingScreenSessionId(null);
     }
   };
 
@@ -932,10 +967,22 @@ export const ParentDashboard: React.FC = () => {
                         </div>
                       </div>
                     </div>
-                    <span
-                      className="h-2.5 w-2.5 rounded-full shrink-0 animate-pulse"
-                      style={{ backgroundColor: session.child_color || '#22d3ee' }}
-                    />
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span
+                        className={`h-2.5 w-2.5 rounded-full shrink-0 ${session.status === 'running' ? 'animate-pulse' : ''}`}
+                        style={{ backgroundColor: session.child_color || '#22d3ee' }}
+                      />
+                      <button
+                        type="button"
+                        disabled={stoppingScreenSessionId !== null}
+                        onClick={() => handleStopScreenSession(session)}
+                        aria-label={`עצור טיימר של ${session.child_name}`}
+                        className="min-h-[44px] rounded-xl border border-red-700/60 bg-red-950/60 px-3 py-2 text-xs font-bold text-red-100 hover:bg-red-900 disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        <XCircle className="h-4 w-4" />
+                        {stoppingScreenSessionId === session.id ? 'עוצר...' : 'עצור טיימר'}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
