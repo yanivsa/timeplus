@@ -128,6 +128,31 @@ export const ChildDashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // A lightweight active-timer poll reflects a parent stop without reloading the
+  // whole dashboard. The server remains authoritative even if this view is closed.
+  useEffect(() => {
+    if (!screenSession?.activeSession?.id) return;
+    let mounted = true;
+    let inFlight = false;
+    const refreshActiveTimer = async () => {
+      if (document.visibilityState !== 'visible' || inFlight || screenSessionBusyRef.current) return;
+      inFlight = true;
+      try {
+        const latest = await apiRequest('/api/child/screen-session');
+        if (!mounted) return;
+        setScreenSession(latest);
+        setScreenSessionLoadedAt(performance.now());
+        if (!latest.activeSession) setStatusMessage('זמן המסך הסתיים או נעצר.');
+      } catch {
+        // Keep the current timer until the next successful server sync.
+      } finally {
+        inFlight = false;
+      }
+    };
+    const interval = setInterval(refreshActiveTimer, 8000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, [screenSession?.activeSession?.id]);
+
   const handleSubmitTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedTask || submittingTaskRef.current) return;
